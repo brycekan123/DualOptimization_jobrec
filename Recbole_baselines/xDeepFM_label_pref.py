@@ -251,7 +251,7 @@ if __name__ == "__main__":
         # DeepFM doesn't use negative sampling - trains on explicit labels
         'neg_sampling': None,
 
-        'epochs': 10,
+        'epochs': 50,
         'train_batch_size': 256,
         'eval_batch_size': 256,
         'learning_rate': 1e-3,
@@ -266,7 +266,7 @@ if __name__ == "__main__":
         'checkpoint_dir': 'saved',
     }
 
-    config = Config(model='DeepFM', dataset=deepfm_ds, config_dict=config_dict)
+    config = Config(model='xDeepFM', dataset=deepfm_ds, config_dict=config_dict)
 
     # 3) Create dataset
     init_seed(config['seed'], reproducibility=True)

@@ -513,7 +513,7 @@ if __name__ == "__main__":
         
         'neg_sampling': None,
 
-        'epochs': 100,
+        'epochs': 50,
         'train_batch_size': 68,
         'eval_batch_size': 68,
         'learning_rate': 1e-3,
