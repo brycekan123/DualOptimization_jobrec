@@ -1,20 +1,5 @@
 #!/usr/bin/env python3
-"""
-BASELINE - Job-Based Ranking (Vanilla Llama)
-=============================================
-Baseline evaluation using vanilla Llama-3-8B-Instruct (no fine-tuning).
-Uses the EXACT SAME job-based ranking setup as the trained model evaluation.
 
-For each positive (user applied and was selected for a job):
-- Sample 49 other users who applied to same job but weren't selected
-- Rank the selected user among all 50 applicants using vanilla Llama scores
-
-NOTE: Prompt is more explicit than trained model's prompt to encourage numeric output.
-      Trained model extracts embeddings so doesn't need text generation instructions.
-      This is a fair comparison - both models are solving the same ranking task.
-
-This establishes the zero-shot baseline performance.
-"""
 
 import os
 import pandas as pd
@@ -28,10 +13,14 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-# ========================================
-# CONFIGURATION
-# ========================================
-HF_TOKEN = ""
+import argparse
+
+parser = argparse.ArgumentParser(description='Evaluate Stage 1A model')
+parser.add_argument('--hf_token', type=str, required=True,
+                    help='HuggingFace API token for model access')
+args = parser.parse_args()
+
+HF_TOKEN = args.hf_token
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
@@ -42,11 +31,11 @@ QUAL_TEST_CSV = os.path.join(PARENT_DIR, "pipeline_output", DATA_DIR, "qual_test
 USER_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_users.csv")
 ITEM_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_items.csv")
 
-# Settings (MUST MATCH TRAINED MODEL!)
-NEGATIVES_PER_SAMPLE = 49  # Sample 49 negatives per positive
-MAX_SEQ_LENGTH = 2000  # Longer for baseline's more explicit prompt
-MAX_NEW_TOKENS = 5  # For score extraction
-NUM_RUNS = 3  # Run baseline 3 times and average
+
+NEGATIVES_PER_SAMPLE = 49  
+MAX_SEQ_LENGTH = 2000  
+MAX_NEW_TOKENS = 5  
+NUM_RUNS = 3  
 
 # Output directory
 OUTPUT_DIR = "baseline_results"
@@ -54,23 +43,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-print("=" * 100)
-print("BASELINE - JOB-BASED RANKING (VANILLA LLAMA)")
-print("=" * 100)
-print(f"\n🖥️  Device: {device}")
-print(f"📁 Model: {MODEL_ID} (NO fine-tuning)")
-print(f"📁 Data: {QUAL_TEST_CSV}")
-print(f"⚙️  Max Seq Length: {MAX_SEQ_LENGTH} (matches trained model)")
-print(f"🔁 Runs: {NUM_RUNS} (will average results)")
-
-# ========================================
-# LOAD DATA
-# ========================================
-print("\n" + "=" * 100)
-print("LOADING DATA")
-print("=" * 100)
-
-# Load metadata
 user_df = pd.read_csv(USER_FILE)
 user_df = user_df[user_df['student_id'] != 'student_id']
 user_df = user_df[user_df['student_id'] != 'user_id:token']
@@ -84,7 +56,6 @@ item_dict = item_df.set_index('job_id').to_dict('index')
 print(f"✓ Loaded {len(user_dict):,} users")
 print(f"✓ Loaded {len(item_dict):,} items")
 
-# Load qual test data
 qual_test_df = pd.read_csv(QUAL_TEST_CSV)
 
 print(f"\n✓ Qual test data: {len(qual_test_df):,} samples")
@@ -96,16 +67,14 @@ n_jobs = qual_test_df['item'].nunique()
 n_positives = (qual_test_df['label_qual'] == 1).sum()
 n_negatives = (qual_test_df['label_qual'] == 0).sum()
 
-print(f"\n📊 Dataset statistics:")
+print(f"\n Dataset statistics:")
 print(f"  Unique users: {n_users:,}")
 print(f"  Unique jobs: {n_jobs:,}")
 print(f"  Positive labels (label_qual=1): {n_positives:,}")
 print(f"  Negative labels (label_qual=0): {n_negatives:,}")
 print(f"  Pos/Neg ratio: 1:{n_negatives/n_positives:.1f}")
 
-# ========================================
-# PREPARE BATCHES (MATCH WORKING VERSION)
-# ========================================
+
 print("\n" + "=" * 100)
 print("PREPARING BATCHES")
 print("=" * 100)
@@ -141,20 +110,16 @@ def prepare_qual_batches(df, max_negatives=49):
     
     return batches
 
-# Prepare test batches
 qual_test_batches = prepare_qual_batches(qual_test_df, NEGATIVES_PER_SAMPLE)
 
 print(f"\n✓ Job-centric QUAL batches (1 job, 1 pos user + N neg users each):")
 print(f"  Test batches: {len(qual_test_batches):,}")
 
-# Analyze batches
 job_ids = [b['job_id'] for b in qual_test_batches]
 print(f"  Unique jobs: {len(set(job_ids))}")
 print(f"  Batches per job (avg): {len(qual_test_batches) / len(set(job_ids)):.1f}")
 
-# ========================================
-# VERIFY BATCH STRUCTURE
-# ========================================
+
 print("\n" + "=" * 100)
 print("BATCH VERIFICATION - First 2 Batches")
 print("=" * 100)
@@ -188,7 +153,6 @@ for batch_idx in range(min(2, len(qual_test_batches))):
     else:
         print(f"  ❌ WARNING: Positive user not found with label_qual=1!")
     
-    # Verify all negative users have label_qual=0
     neg_check = []
     for neg_user in negative_users[:5]:  # Check first 5
         neg_in_data = job_data[(job_data['user'] == neg_user) & (job_data['label_qual'] == 0)]
@@ -208,9 +172,7 @@ print(f"\n{'='*80}")
 print("VERIFICATION COMPLETE")
 print(f"{'='*80}")
 
-# ========================================
-# PROMPT BUILDER
-# ========================================
+
 def format_features(features_dict):
     """Convert features dict to readable string."""
     lines = []
@@ -249,9 +211,7 @@ Rating:"""
     
     return prompt
 
-# ========================================
-# SCORE EXTRACTION
-# ========================================
+
 def extract_score(response):
     """Extract numeric score from text response - STRICT numeric only."""
     response = response.strip()
@@ -279,9 +239,6 @@ def extract_score(response):
     # No numeric score found - return None and skip sample
     return None
 
-# ========================================
-# LOAD MODEL
-# ========================================
 print("\n" + "=" * 100)
 print("LOADING MODEL")
 print("=" * 100)
@@ -308,9 +265,6 @@ model = AutoModelForCausalLM.from_pretrained(
 
 print("✓ Loaded model (vanilla Llama-3-8B-Instruct)")
 
-# ========================================
-# SCORING FUNCTION
-# ========================================
 def score_user_job(user_id, job_id):
     """Score a single user-job pair by generating text."""
     prompt = build_ranking_prompt(user_id, job_id)
@@ -345,9 +299,7 @@ def score_user_job(user_id, job_id):
     score = extract_score(response)
     return score, response
 
-# ========================================
-# RANKING METRICS (UPDATED TO @1, @3, @5)
-# ========================================
+
 def calculate_ranking_metrics(ranks):
     """Calculate Recall@k, NDCG@k, Precision@k from list of ranks."""
     metrics = {}
@@ -378,9 +330,7 @@ def calculate_ranking_metrics(ranks):
     
     return metrics
 
-# ========================================
-# EVALUATION FUNCTION
-# ========================================
+
 def evaluate_baseline(batches, desc="Evaluating", print_batches=False):
     """Evaluate baseline model on batches."""
     model.eval()
@@ -396,13 +346,11 @@ def evaluate_baseline(batches, desc="Evaluating", print_batches=False):
             positive_user = batch['positive_user']
             negative_users = batch['negative_users']
             
-            # All users to rank (positive first, then negatives)
             all_users = [positive_user] + negative_users
             
             scores = []
             responses = []
             
-            # Score each user independently
             for user_id in all_users:
                 score, response = score_user_job(user_id, job_id)
                 scores.append(score)
@@ -411,22 +359,15 @@ def evaluate_baseline(batches, desc="Evaluating", print_batches=False):
                 if score is not None:
                     successful_scores.append(score)
             
-            # Check if we got valid scores
             valid_scores = [s for s in scores if s is not None]
             
             if len(valid_scores) < len(scores):
                 failed_parses += (len(scores) - len(valid_scores))
             
-            # If positive score is valid, calculate rank
             if scores[0] is not None:
-                # Replace None with 0 for negatives (worst case)
                 scores_filled = [s if s is not None else 0.0 for s in scores]
-                
-                # Rank: how many users scored higher than positive
                 pos_rank = sum(1 for s in scores_filled[1:] if s > scores_filled[0]) + 1
                 all_ranks.append(pos_rank)
-                
-                # Store scores for this batch
                 scores_array = np.array([s for s in scores[1:] if s is not None])
                 all_scores_data.append({
                     'batch_idx': batch_idx,
@@ -491,14 +432,12 @@ def evaluate_baseline(batches, desc="Evaluating", print_batches=False):
     
     return metrics, successful_scores, all_scores_data
 
-# ========================================
-# RUN EVALUATION (3 RUNS)
-# ========================================
+
 print("\n" + "=" * 100)
 print(f"EVALUATION - RUNNING {NUM_RUNS} TIMES")
 print("=" * 100)
-print(f"\n🔁 Running {NUM_RUNS} times and averaging results...")
-print(f"📊 Using {len(qual_test_batches)} test batches")
+print(f"\n Running {NUM_RUNS} times and averaging results...")
+print(f" Using {len(qual_test_batches)} test batches")
 
 all_runs_metrics = []
 all_runs_scores_data = []
@@ -508,18 +447,15 @@ for run_idx in range(NUM_RUNS):
     print(f"RUN {run_idx + 1}/{NUM_RUNS}")
     print('='*100)
     
-    # Run evaluation (only show details for first run)
     if run_idx == 0:
         metrics, scores, scores_data = evaluate_baseline(qual_test_batches, desc=f"Run {run_idx+1}", print_batches=True)
     else:
         metrics, scores, scores_data = evaluate_baseline(qual_test_batches, desc=f"Run {run_idx+1}", print_batches=False)
     
-    # Store results
     all_runs_metrics.append(metrics)
     all_runs_scores_data.append(scores_data)
-    
-    # Print detailed results for this run
-    print(f"\n📊 Run {run_idx + 1} Results:")
+
+    print(f"\n Run {run_idx + 1} Results:")
     print(f"  Recall@1:  {metrics['recall@1']:.4f}")
     print(f"  Recall@3:  {metrics['recall@3']:.4f}")
     print(f"  Recall@5:  {metrics['recall@5']:.4f}")
@@ -529,9 +465,7 @@ for run_idx in range(NUM_RUNS):
     print(f"  Avg Rank:  {metrics['avg_rank']:.2f}")
     print(f"  Parse Rate: {metrics['parse_success_rate']:.1%}")
 
-# ========================================
-# CALCULATE AVERAGES ACROSS RUNS
-# ========================================
+
 print("\n" + "=" * 100)
 print(f"AVERAGED RESULTS ACROSS {NUM_RUNS} RUNS")
 print("=" * 100)
@@ -546,7 +480,7 @@ for key in metric_keys:
     averaged_metrics[f'{key}_mean'] = np.mean(values)
     averaged_metrics[f'{key}_std'] = np.std(values)
 
-print(f"\n📊 BASELINE PERFORMANCE (mean ± std):")
+print(f"\n BASELINE PERFORMANCE (mean ± std):")
 print(f"\n  Recall Metrics:")
 print(f"    Recall@1:  {averaged_metrics['recall@1_mean']:.4f} ± {averaged_metrics['recall@1_std']:.4f}")
 print(f"    Recall@3:  {averaged_metrics['recall@3_mean']:.4f} ± {averaged_metrics['recall@3_std']:.4f}")
@@ -559,21 +493,7 @@ print(f"\n  Other Metrics:")
 print(f"    Avg Rank:  {averaged_metrics['avg_rank_mean']:.2f} ± {averaged_metrics['avg_rank_std']:.2f}")
 print(f"    Parse Rate: {averaged_metrics['parse_success_rate_mean']:.1%}")
 
-# Random baseline comparison
-random_baseline_rank = (NEGATIVES_PER_SAMPLE + 1) / 2
-print(f"\n📊 vs Random Baseline:")
-print(f"  Random avg rank:      {random_baseline_rank:.1f}/50")
-print(f"  Vanilla Llama rank:   {averaged_metrics['avg_rank_mean']:.1f}/50")
-print(f"  Improvement:          {random_baseline_rank - averaged_metrics['avg_rank_mean']:.1f} ranks")
 
-# ========================================
-# SAVE RESULTS
-# ========================================
-print("\n" + "=" * 100)
-print("SAVING RESULTS")
-print("=" * 100)
-
-# Save overall results with all runs
 results = {
     'model': 'baseline_llama3_8b_instruct',
     'dataset': QUAL_TEST_CSV,
@@ -589,12 +509,7 @@ results = {
         }
         for i in range(NUM_RUNS)
     ],
-    'averaged_metrics': {k: float(v) for k, v in averaged_metrics.items()},
-    'baseline_comparison': {
-        'random_avg_rank': float(random_baseline_rank),
-        'vanilla_llama_avg_rank': float(averaged_metrics['avg_rank_mean']),
-        'improvement_over_random': float(random_baseline_rank - averaged_metrics['avg_rank_mean'])
-    }
+    'averaged_metrics': {k: float(v) for k, v in averaged_metrics.items()}
 }
 
 json_file = os.path.join(OUTPUT_DIR, "baseline_job_ranking.json")
@@ -631,7 +546,6 @@ individual_csv = os.path.join(OUTPUT_DIR, "baseline_individual_runs.csv")
 individual_df.to_csv(individual_csv, index=False)
 print(f"✓ Individual runs: {individual_csv}")
 
-# Save detailed scores from first run only (to avoid huge files)
 if all_runs_scores_data[0]:
     scores_df = pd.DataFrame(all_runs_scores_data[0])
     scores_csv = os.path.join(OUTPUT_DIR, "baseline_scores_run1.csv")
@@ -639,9 +553,9 @@ if all_runs_scores_data[0]:
     print(f"✓ Scores from Run 1: {scores_csv} ({len(scores_df)} batches)")
 
 print("\n" + "=" * 100)
-print("BASELINE EVALUATION COMPLETE! 🎉")
+print("BASELINE EVALUATION COMPLETE! ")
 print("=" * 100)
-print(f"\n💡 Summary:")
+print(f"\n Summary:")
 print(f"  - Tested on {len(qual_test_batches)} batches from qual_test.csv")
 print(f"  - Ran {NUM_RUNS} times and averaged results")
 print(f"\n  Final Metrics (mean ± std):")

@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""
-BASELINE - User-Based Ranking (Vanilla Llama) - PREFERENCE DATA
-=================================================================
-Baseline evaluation using vanilla Llama-3-8B-Instruct (no fine-tuning).
-Evaluates on PREFERENCE data (label_pref) using user-centric batches.
-
-For each positive (user applied and preferred a job):
-- Sample 49 other jobs the user applied to but didn't prefer
-- Rank the preferred job among all 50 jobs using vanilla Llama scores
-
-This establishes the zero-shot baseline performance on preference prediction.
-"""
 
 import os
 import pandas as pd
@@ -24,10 +12,17 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
+import argparse
+
 # ========================================
-# CONFIGURATION
+# ARGUMENT PARSER
 # ========================================
-HF_TOKEN = ""
+parser = argparse.ArgumentParser(description='Evaluate Stage 1A model')
+parser.add_argument('--hf_token', type=str, required=True,
+                    help='HuggingFace API token for model access')
+args = parser.parse_args()
+
+HF_TOKEN = args.hf_token
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
@@ -38,30 +33,16 @@ PREF_TEST_CSV = os.path.join(PARENT_DIR, "pipeline_output", DATA_DIR, "test.csv"
 USER_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_users.csv")
 ITEM_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_items.csv")
 
-# Settings
-NEGATIVES_PER_SAMPLE = 49  # Sample 49 negatives per positive
-MAX_SEQ_LENGTH = 2000  # Longer for baseline's more explicit prompt
-MAX_NEW_TOKENS = 5  # For score extraction
-NUM_RUNS = 1  # Just 1 run for full test set (large dataset)
-
-# Output directory
+NEGATIVES_PER_SAMPLE = 49  
+MAX_SEQ_LENGTH = 2000 
+MAX_NEW_TOKENS = 5  
+NUM_RUNS = 1 
 OUTPUT_DIR = "baseline_results_pref"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-print("=" * 100)
-print("BASELINE - USER-BASED RANKING (VANILLA LLAMA) - PREFERENCE DATA")
-print("=" * 100)
-print(f"\n🖥️  Device: {device}")
-print(f"📁 Model: {MODEL_ID} (NO fine-tuning)")
-print(f"📁 Data: {PREF_TEST_CSV}")
-print(f"⚙️  Max Seq Length: {MAX_SEQ_LENGTH}")
-print(f"🔁 Runs: {NUM_RUNS} (single run on full test set)")
 
-# ========================================
-# LOAD DATA
-# ========================================
 print("\n" + "=" * 100)
 print("LOADING DATA")
 print("=" * 100)
@@ -80,40 +61,30 @@ item_dict = item_df.set_index('job_id').to_dict('index')
 print(f"✓ Loaded {len(user_dict):,} users")
 print(f"✓ Loaded {len(item_dict):,} items")
 
-# Load pref test data
+
 pref_test_df = pd.read_csv(PREF_TEST_CSV)
 
 print(f"\n✓ Pref test data: {len(pref_test_df):,} samples")
 print(f"  Columns: {pref_test_df.columns.tolist()}")
 
-# Basic statistics
 n_users = pref_test_df['user'].nunique()
 n_jobs = pref_test_df['item'].nunique()
 n_positives = (pref_test_df['label_pref'] == 1).sum()
 n_negatives = (pref_test_df['label_pref'] == 0).sum()
 
-print(f"\n📊 Dataset statistics:")
+print(f"\n Dataset statistics:")
 print(f"  Unique users: {n_users:,}")
 print(f"  Unique jobs: {n_jobs:,}")
 print(f"  Positive labels (label_pref=1): {n_positives:,}")
 print(f"  Negative labels (label_pref=0): {n_negatives:,}")
 print(f"  Pos/Neg ratio: 1:{n_negatives/n_positives:.1f}")
 
-# ========================================
-# PREPARE BATCHES (USER-CENTRIC)
-# ========================================
 print("\n" + "=" * 100)
 print("PREPARING BATCHES")
 print("=" * 100)
 
 def prepare_pref_batches(df, max_negatives=49):
-    """
-    Prepare user-centric batches for preference data.
-    Each batch: 1 user, 1 positive job + N negative jobs
-    Uses 'label_pref' column.
     
-    EXACT MATCH to Stage 1/2 working version.
-    """
     batches = []
     user_groups = df.groupby('user')
     
@@ -137,20 +108,16 @@ def prepare_pref_batches(df, max_negatives=49):
     
     return batches
 
-# Prepare test batches
 pref_test_batches = prepare_pref_batches(pref_test_df, NEGATIVES_PER_SAMPLE)
 
 print(f"\n✓ User-centric PREF batches (1 user, 1 pos job + N neg jobs each):")
 print(f"  Test batches: {len(pref_test_batches):,}")
 
-# Analyze batches
 user_ids = [b['user_id'] for b in pref_test_batches]
 print(f"  Unique users: {len(set(user_ids))}")
 print(f"  Batches per user (avg): {len(pref_test_batches) / len(set(user_ids)):.1f}")
 
-# ========================================
-# VERIFY BATCH STRUCTURE
-# ========================================
+
 print("\n" + "=" * 100)
 print("BATCH VERIFICATION - First 2 Batches")
 print("=" * 100)
@@ -204,11 +171,7 @@ print(f"\n{'='*80}")
 print("VERIFICATION COMPLETE")
 print(f"{'='*80}")
 
-# ========================================
-# PROMPT BUILDER
-# ========================================
 def format_features(features_dict):
-    """Convert features dict to readable string."""
     lines = []
     for key, value in features_dict.items():
         nice_key = key.replace('_', ' ').title()
@@ -219,7 +182,6 @@ def format_features(features_dict):
     return "\n".join(lines)
 
 def build_ranking_prompt(user_id, item_id):
-    """Build prompt with explicit numeric output instructions."""
     user_features = user_dict.get(user_id, {})
     user_info = format_features(user_features) if user_features else "Unknown user"
     
@@ -245,22 +207,16 @@ Rating:"""
     
     return prompt
 
-# ========================================
-# SCORE EXTRACTION
-# ========================================
+
 def extract_score(response):
     """Extract numeric score from text response - STRICT numeric only."""
     response = response.strip()
-    
-    # Try direct float conversion first
     try:
         score = float(response)
         if 0.0 <= score <= 1.0:
             return score
     except ValueError:
         pass
-    
-    # Look for any number between 0 and 1
     pattern = r'\b(0?\.\d+|[01]\.?\d*)\b'
     matches = re.findall(pattern, response)
     
@@ -271,13 +227,8 @@ def extract_score(response):
                 return score
         except ValueError:
             continue
-    
-    # No numeric score found - return None and skip sample
     return None
 
-# ========================================
-# LOAD MODEL
-# ========================================
 print("\n" + "=" * 100)
 print("LOADING MODEL")
 print("=" * 100)
@@ -374,9 +325,7 @@ def calculate_ranking_metrics(ranks):
     
     return metrics
 
-# ========================================
-# EVALUATION FUNCTION
-# ========================================
+
 def evaluate_baseline(batches, desc="Evaluating", print_batches=False):
     """Evaluate baseline model on batches."""
     model.eval()
@@ -487,9 +436,6 @@ def evaluate_baseline(batches, desc="Evaluating", print_batches=False):
     
     return metrics, successful_scores, all_scores_data
 
-# ========================================
-# RUN EVALUATION (1 RUN)
-# ========================================
 print("\n" + "=" * 100)
 print(f"EVALUATION - RUNNING {NUM_RUNS} TIME(S)")
 print("=" * 100)
@@ -540,9 +486,7 @@ for run_idx in range(NUM_RUNS):
         count = sum(1 for r in ranks if r >= rank_bins[-1])
         print(f"    Ranks {rank_bins[-1]}+: {count} ({count/len(ranks)*100:.1f}%)")
 
-# ========================================
-# CALCULATE AVERAGES ACROSS RUNS
-# ========================================
+
 print("\n" + "=" * 100)
 if NUM_RUNS > 1:
     print(f"AVERAGED RESULTS ACROSS {NUM_RUNS} RUNS")
@@ -587,21 +531,11 @@ else:
     print(f"    Avg Rank:  {averaged_metrics['avg_rank_mean']:.2f}")
     print(f"    Parse Rate: {averaged_metrics['parse_success_rate_mean']:.1%}")
 
-# Random baseline comparison
-random_baseline_rank = (NEGATIVES_PER_SAMPLE + 1) / 2
-print(f"\n📊 vs Random Baseline:")
-print(f"  Random avg rank:      {random_baseline_rank:.1f}/50")
-print(f"  Vanilla Llama rank:   {averaged_metrics['avg_rank_mean']:.1f}/50")
-print(f"  Improvement:          {random_baseline_rank - averaged_metrics['avg_rank_mean']:.1f} ranks")
 
-# ========================================
-# SAVE RESULTS
-# ========================================
 print("\n" + "=" * 100)
 print("SAVING RESULTS")
 print("=" * 100)
 
-# Save overall results with all runs
 results = {
     'model': 'baseline_llama3_8b_instruct',
     'dataset': PREF_TEST_CSV,
@@ -618,12 +552,7 @@ results = {
         }
         for i in range(NUM_RUNS)
     ],
-    'averaged_metrics': {k: float(v) for k, v in averaged_metrics.items()},
-    'baseline_comparison': {
-        'random_avg_rank': float(random_baseline_rank),
-        'vanilla_llama_avg_rank': float(averaged_metrics['avg_rank_mean']),
-        'improvement_over_random': float(random_baseline_rank - averaged_metrics['avg_rank_mean'])
-    }
+    'averaged_metrics': {k: float(v) for k, v in averaged_metrics.items()}
 }
 
 json_file = os.path.join(OUTPUT_DIR, "baseline_user_ranking_pref.json")
@@ -631,7 +560,6 @@ with open(json_file, 'w') as f:
     json.dump(results, f, indent=2)
 print(f"✓ Complete results: {json_file}")
 
-# Save averaged metrics as CSV
 averaged_metrics_list = []
 for key in metric_keys:
     averaged_metrics_list.append({
@@ -645,7 +573,6 @@ averaged_csv = os.path.join(OUTPUT_DIR, "baseline_averaged_metrics_pref.csv")
 averaged_df.to_csv(averaged_csv, index=False)
 print(f"✓ Averaged metrics: {averaged_csv}")
 
-# Save individual run metrics as CSV
 individual_runs_data = []
 for i in range(NUM_RUNS):
     for key in metric_keys:
@@ -660,7 +587,6 @@ individual_csv = os.path.join(OUTPUT_DIR, "baseline_individual_runs_pref.csv")
 individual_df.to_csv(individual_csv, index=False)
 print(f"✓ Individual runs: {individual_csv}")
 
-# Save detailed scores from first run only (to avoid huge files)
 if all_runs_scores_data[0]:
     scores_df = pd.DataFrame(all_runs_scores_data[0])
     scores_csv = os.path.join(OUTPUT_DIR, "baseline_scores_pref_run1.csv")
@@ -668,7 +594,7 @@ if all_runs_scores_data[0]:
     print(f"✓ Scores from Run 1: {scores_csv} ({len(scores_df)} batches)")
 
 print("\n" + "=" * 100)
-print("BASELINE EVALUATION COMPLETE! 🎉")
+print("BASELINE EVALUATION COMPLETE! ")
 print("=" * 100)
 print(f"\n💡 Summary:")
 print(f"  - Tested on {len(pref_test_batches)} batches from test.csv (PREFERENCE DATA)")

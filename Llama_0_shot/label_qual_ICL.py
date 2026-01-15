@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""
-BASELINE - Job-Based Ranking with IN-CONTEXT LEARNING (Vanilla Llama) - QUALIFICATION DATA
-============================================================================================
-Baseline evaluation using vanilla Llama-3-8B-Instruct with in-context learning.
-Uses 4 examples (2 jobs, each with 1 positive user + 1 negative user) from training data.
 
-For each positive (user applied and was selected for a job):
-- Sample 49 other users who applied to same job but weren't selected
-- Rank the selected user among all 50 applicants using vanilla Llama scores
-- INCLUDES 4 ICL examples in every prompt
-
-This establishes the in-context learning baseline performance on qualification prediction.
-"""
 
 import os
 import pandas as pd
@@ -25,10 +13,14 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-# ========================================
-# CONFIGURATION
-# ========================================
-HF_TOKEN = ""
+import argparse
+
+parser = argparse.ArgumentParser(description='Evaluate Stage 1A model')
+parser.add_argument('--hf_token', type=str, required=True,
+                    help='HuggingFace API token for model access')
+args = parser.parse_args()
+
+HF_TOKEN = args.hf_token
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
@@ -41,11 +33,11 @@ USER_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_users.csv")
 ITEM_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_items.csv")
 
 # Settings
-NEGATIVES_PER_SAMPLE = 49  # Sample 49 negatives per positive
-MAX_SEQ_LENGTH = 4000  # Longer for ICL with 4 examples (~3300 tokens)
-MAX_NEW_TOKENS = 5  # For score extraction
-NUM_RUNS = 3  # Run 3 times and average (match qual baseline)
-NUM_ICL_EXAMPLES = 4  # 2 jobs × (1 positive user + 1 negative user) = 4 examples
+NEGATIVES_PER_SAMPLE = 49 
+MAX_SEQ_LENGTH = 4000  
+MAX_NEW_TOKENS = 5  
+NUM_RUNS = 3  
+NUM_ICL_EXAMPLES = 4  
 
 # Output directory
 OUTPUT_DIR = "baseline_results_qual_icl"
@@ -53,25 +45,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-print("=" * 100)
-print("BASELINE - IN-CONTEXT LEARNING (VANILLA LLAMA) - QUALIFICATION DATA")
-print("=" * 100)
-print(f"\n🖥️  Device: {device}")
-print(f"📁 Model: {MODEL_ID} (NO fine-tuning)")
-print(f"📁 Train Data: {QUAL_TRAIN_CSV} (for ICL examples)")
-print(f"📁 Test Data: {QUAL_TEST_CSV}")
-print(f"⚙️  Max Seq Length: {MAX_SEQ_LENGTH}")
-print(f"📚 ICL Examples: {NUM_ICL_EXAMPLES} (2 jobs, each with 1 pos + 1 neg user)")
-print(f"🔁 Runs: {NUM_RUNS} (will average results)")
-
-# ========================================
-# LOAD DATA
-# ========================================
 print("\n" + "=" * 100)
 print("LOADING DATA")
 print("=" * 100)
 
-# Load metadata
 user_df = pd.read_csv(USER_FILE)
 user_df = user_df[user_df['student_id'] != 'student_id']
 user_df = user_df[user_df['student_id'] != 'user_id:token']
@@ -85,11 +62,9 @@ item_dict = item_df.set_index('job_id').to_dict('index')
 print(f"✓ Loaded {len(user_dict):,} users")
 print(f"✓ Loaded {len(item_dict):,} items")
 
-# Load qual training data (for ICL examples)
 qual_train_df = pd.read_csv(QUAL_TRAIN_CSV)
 print(f"✓ Loaded {len(qual_train_df):,} training samples (for ICL examples)")
 
-# Load qual test data
 qual_test_df = pd.read_csv(QUAL_TEST_CSV)
 print(f"✓ Loaded {len(qual_test_df):,} test samples")
 
@@ -99,21 +74,14 @@ n_jobs = qual_test_df['item'].nunique()
 n_positives = (qual_test_df['label_qual'] == 1).sum()
 n_negatives = (qual_test_df['label_qual'] == 0).sum()
 
-print(f"\n📊 Test dataset statistics:")
+print(f"\n Test dataset statistics:")
 print(f"  Unique users: {n_users:,}")
 print(f"  Unique jobs: {n_jobs:,}")
 print(f"  Positive labels (label_qual=1): {n_positives:,}")
 print(f"  Negative labels (label_qual=0): {n_negatives:,}")
 print(f"  Pos/Neg ratio: 1:{n_negatives/n_positives:.1f}")
 
-# ========================================
-# SAMPLE IN-CONTEXT LEARNING EXAMPLES
-# ========================================
-print("\n" + "=" * 100)
-print("SAMPLING IN-CONTEXT LEARNING EXAMPLES")
-print("=" * 100)
 
-# Get 2 jobs with both positive and negative examples
 example_jobs = []
 for job_id, group in qual_train_df.groupby('item'):
     n_pos = (group['label_qual'] == 1).sum()
@@ -129,7 +97,6 @@ if len(example_jobs) < 2:
 
 print(f"✓ Found example jobs: {example_jobs}")
 
-# Sample examples (FIXED seed for reproducibility)
 icl_examples = []
 for job_id in example_jobs:
     job_data = qual_train_df[qual_train_df['item'] == job_id]
@@ -140,16 +107,15 @@ for job_id in example_jobs:
         'job_id': job_id,
         'user_id': pos_sample['user'],
         'label': 1,
-        'score': 0.9  # High score for positive
+        'score': 0.9  
     })
     
-    # Get 1 negative from same job
     neg_sample = job_data[job_data['label_qual'] == 0].sample(n=1, random_state=42).iloc[0]
     icl_examples.append({
         'job_id': job_id,
         'user_id': neg_sample['user'],
         'label': 0,
-        'score': 0.1  # Low score for negative
+        'score': 0.1 
     })
 
 print(f"\n✓ Sampled {len(icl_examples)} ICL examples:")
@@ -157,19 +123,13 @@ for i, ex in enumerate(icl_examples, 1):
     label_str = "QUALIFIED" if ex['label'] == 1 else "NOT QUALIFIED"
     print(f"  {i}. Job {ex['job_id']}, User {ex['user_id']}, {label_str}, Score {ex['score']}")
 
-# ========================================
-# PREPARE BATCHES (JOB-CENTRIC)
-# ========================================
+
 print("\n" + "=" * 100)
 print("PREPARING BATCHES")
 print("=" * 100)
 
 def prepare_qual_batches(df, max_negatives=49):
-    """
-    Prepare job-centric batches for qualification data.
-    Each batch: 1 job, 1 positive user + N negative users
-    Uses 'label_qual' column.
-    """
+    
     batches = []
     job_groups = df.groupby('item')
     
@@ -193,20 +153,15 @@ def prepare_qual_batches(df, max_negatives=49):
     
     return batches
 
-# Prepare test batches
 qual_test_batches = prepare_qual_batches(qual_test_df, NEGATIVES_PER_SAMPLE)
 
 print(f"\n✓ Job-centric QUAL batches (1 job, 1 pos user + N neg users each):")
 print(f"  Test batches: {len(qual_test_batches):,}")
 
-# Analyze batches
 job_ids = [b['job_id'] for b in qual_test_batches]
 print(f"  Unique jobs: {len(set(job_ids))}")
 print(f"  Batches per job (avg): {len(qual_test_batches) / len(set(job_ids)):.1f}")
 
-# ========================================
-# VERIFY BATCH STRUCTURE
-# ========================================
 print("\n" + "=" * 100)
 print("BATCH VERIFICATION - First 2 Batches")
 print("=" * 100)
@@ -249,11 +204,8 @@ print(f"\n{'='*80}")
 print("VERIFICATION COMPLETE")
 print(f"{'='*80}")
 
-# ========================================
-# PROMPT BUILDER WITH ICL
-# ========================================
+
 def format_features(features_dict):
-    """Convert features dict to readable string."""
     lines = []
     for key, value in features_dict.items():
         nice_key = key.replace('_', ' ').title()
@@ -264,12 +216,7 @@ def format_features(features_dict):
     return "\n".join(lines)
 
 def build_icl_prompt(user_id, item_id, examples):
-    """
-    Build in-context learning prompt with examples.
     
-    examples: list of dicts with keys 'user_id', 'job_id', 'label', 'score'
-    """
-    # Build examples section
     examples_text = "Here are some examples of user-item ratings:\n\n"
     
     for i, ex in enumerate(examples, 1):
@@ -316,22 +263,15 @@ Rating:"""
     
     return prompt
 
-# ========================================
-# SCORE EXTRACTION
-# ========================================
+
 def extract_score(response):
-    """Extract numeric score from text response - STRICT numeric only."""
     response = response.strip()
-    
-    # Try direct float conversion first
     try:
         score = float(response)
         if 0.0 <= score <= 1.0:
             return score
     except ValueError:
         pass
-    
-    # Look for any number between 0 and 1
     pattern = r'\b(0?\.\d+|[01]\.?\d*)\b'
     matches = re.findall(pattern, response)
     
@@ -342,13 +282,8 @@ def extract_score(response):
                 return score
         except ValueError:
             continue
-    
-    # No numeric score found - return None and skip sample
     return None
 
-# ========================================
-# LOAD MODEL
-# ========================================
 print("\n" + "=" * 100)
 print("LOADING MODEL")
 print("=" * 100)
@@ -375,9 +310,6 @@ model = AutoModelForCausalLM.from_pretrained(
 
 print("✓ Loaded model (vanilla Llama-3-8B-Instruct)")
 
-# ========================================
-# SCORING FUNCTION
-# ========================================
 def score_user_job(user_id, job_id):
     """Score a single user-job pair by generating text with ICL examples."""
     prompt = build_icl_prompt(user_id, job_id, icl_examples)
@@ -412,9 +344,6 @@ def score_user_job(user_id, job_id):
     score = extract_score(response)
     return score, response
 
-# ========================================
-# RANKING METRICS
-# ========================================
 def calculate_ranking_metrics(ranks):
     """Calculate Recall@k, NDCG@k, Precision@k from list of ranks."""
     metrics = {}
@@ -445,9 +374,6 @@ def calculate_ranking_metrics(ranks):
     
     return metrics
 
-# ========================================
-# EVALUATION FUNCTION
-# ========================================
 def evaluate_baseline(batches, desc="Evaluating", print_batches=False):
     """Evaluate baseline model on batches."""
     model.eval()
@@ -478,22 +404,17 @@ def evaluate_baseline(batches, desc="Evaluating", print_batches=False):
                 if score is not None:
                     successful_scores.append(score)
             
-            # Check if we got valid scores
             valid_scores = [s for s in scores if s is not None]
             
             if len(valid_scores) < len(scores):
                 failed_parses += (len(scores) - len(valid_scores))
             
-            # If positive score is valid, calculate rank
             if scores[0] is not None:
-                # Replace None with 0 for negatives (worst case)
                 scores_filled = [s if s is not None else 0.0 for s in scores]
                 
-                # Rank: how many users scored higher than positive
                 pos_rank = sum(1 for s in scores_filled[1:] if s > scores_filled[0]) + 1
                 all_ranks.append(pos_rank)
                 
-                # Store scores for this batch
                 scores_array = np.array([s for s in scores[1:] if s is not None])
                 all_scores_data.append({
                     'batch_idx': batch_idx,
@@ -558,9 +479,7 @@ def evaluate_baseline(batches, desc="Evaluating", print_batches=False):
     
     return metrics, successful_scores, all_scores_data
 
-# ========================================
-# RUN EVALUATION (3 RUNS)
-# ========================================
+
 print("\n" + "=" * 100)
 print(f"EVALUATION - RUNNING {NUM_RUNS} TIMES")
 print("=" * 100)
@@ -611,14 +530,10 @@ for run_idx in range(NUM_RUNS):
         count = sum(1 for r in ranks if r >= rank_bins[-1])
         print(f"    Ranks {rank_bins[-1]}+: {count} ({count/len(ranks)*100:.1f}%)")
 
-# ========================================
-# CALCULATE AVERAGES ACROSS RUNS
-# ========================================
 print("\n" + "=" * 100)
 print(f"AVERAGED RESULTS ACROSS {NUM_RUNS} RUNS")
 print("=" * 100)
 
-# Calculate mean and std for each metric
 metric_keys = ['recall@1', 'recall@3', 'recall@5', 'precision@1', 'precision@3', 
                'precision@5', 'ndcg@1', 'ndcg@3', 'ndcg@5', 'avg_rank', 'parse_success_rate']
 
@@ -641,21 +556,10 @@ print(f"\n  Other Metrics:")
 print(f"    Avg Rank:  {averaged_metrics['avg_rank_mean']:.2f} ± {averaged_metrics['avg_rank_std']:.2f}")
 print(f"    Parse Rate: {averaged_metrics['parse_success_rate_mean']:.1%}")
 
-# Random baseline comparison
-random_baseline_rank = (NEGATIVES_PER_SAMPLE + 1) / 2
-print(f"\n📊 vs Random Baseline:")
-print(f"  Random avg rank:      {random_baseline_rank:.1f}/50")
-print(f"  ICL Llama rank:       {averaged_metrics['avg_rank_mean']:.1f}/50")
-print(f"  Improvement:          {random_baseline_rank - averaged_metrics['avg_rank_mean']:.1f} ranks")
-
-# ========================================
-# SAVE RESULTS
-# ========================================
 print("\n" + "=" * 100)
 print("SAVING RESULTS")
 print("=" * 100)
 
-# Save overall results with all runs
 results = {
     'model': 'baseline_llama3_8b_instruct_icl',
     'dataset': QUAL_TEST_CSV,
@@ -686,12 +590,7 @@ results = {
         }
         for i in range(NUM_RUNS)
     ],
-    'averaged_metrics': {k: float(v) for k, v in averaged_metrics.items()},
-    'baseline_comparison': {
-        'random_avg_rank': float(random_baseline_rank),
-        'icl_llama_avg_rank': float(averaged_metrics['avg_rank_mean']),
-        'improvement_over_random': float(random_baseline_rank - averaged_metrics['avg_rank_mean'])
-    }
+    'averaged_metrics': {k: float(v) for k, v in averaged_metrics.items()}
 }
 
 json_file = os.path.join(OUTPUT_DIR, "baseline_job_ranking_qual_icl.json")

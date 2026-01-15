@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""
-BASELINE - User-Based Ranking with IN-CONTEXT LEARNING (Vanilla Llama) - PREFERENCE DATA
-==========================================================================================
-Baseline evaluation using vanilla Llama-3-8B-Instruct with in-context learning.
-Uses 4 examples (2 users, each with 1 positive + 1 negative) from training data.
 
-For each positive (user applied and preferred a job):
-- Sample 49 other jobs the user applied to but didn't prefer
-- Rank the preferred job among all 50 jobs using vanilla Llama scores
-- INCLUDES 4 ICL examples in every prompt
-
-This establishes the in-context learning baseline performance on preference prediction.
-"""
 
 import os
 import pandas as pd
@@ -24,11 +12,14 @@ import numpy as np
 import warnings
 
 warnings.filterwarnings('ignore')
+import argparse
 
-# ========================================
-# CONFIGURATION
-# ========================================
-HF_TOKEN = ""
+parser = argparse.ArgumentParser(description='Evaluate Stage 1A model')
+parser.add_argument('--hf_token', type=str, required=True,
+                    help='HuggingFace API token for model access')
+args = parser.parse_args()
+
+HF_TOKEN = args.hf_token
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
@@ -41,11 +32,11 @@ USER_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_users.csv")
 ITEM_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_items.csv")
 
 # Settings
-NEGATIVES_PER_SAMPLE = 49  # Sample 49 negatives per positive
-MAX_SEQ_LENGTH = 4000  # Longer for ICL with 4 examples (~3300 tokens)
-MAX_NEW_TOKENS = 5  # For score extraction
-NUM_RUNS = 1  # Just 1 run for full test set (large dataset)
-NUM_ICL_EXAMPLES = 4  # 2 users × (1 positive + 1 negative) = 4 examples
+NEGATIVES_PER_SAMPLE = 49  
+MAX_SEQ_LENGTH = 4000  
+MAX_NEW_TOKENS = 5  
+NUM_RUNS = 1  
+NUM_ICL_EXAMPLES = 4  
 
 # Output directory
 OUTPUT_DIR = "baseline_results_pref_icl"
@@ -53,25 +44,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-print("=" * 100)
-print("BASELINE - IN-CONTEXT LEARNING (VANILLA LLAMA) - PREFERENCE DATA")
-print("=" * 100)
-print(f"\n🖥️  Device: {device}")
-print(f"📁 Model: {MODEL_ID} (NO fine-tuning)")
-print(f"📁 Train Data: {PREF_TRAIN_CSV} (for ICL examples)")
-print(f"📁 Test Data: {PREF_TEST_CSV}")
-print(f"⚙️  Max Seq Length: {MAX_SEQ_LENGTH}")
-print(f"📚 ICL Examples: {NUM_ICL_EXAMPLES} (2 users, each with 1 pos + 1 neg)")
-print(f"🔁 Runs: {NUM_RUNS} (single run on full test set)")
-
-# ========================================
-# LOAD DATA
-# ========================================
-print("\n" + "=" * 100)
-print("LOADING DATA")
-print("=" * 100)
-
-# Load metadata
 user_df = pd.read_csv(USER_FILE)
 user_df = user_df[user_df['student_id'] != 'student_id']
 user_df = user_df[user_df['student_id'] != 'user_id:token']
@@ -99,21 +71,18 @@ n_jobs = pref_test_df['item'].nunique()
 n_positives = (pref_test_df['label_pref'] == 1).sum()
 n_negatives = (pref_test_df['label_pref'] == 0).sum()
 
-print(f"\n📊 Test dataset statistics:")
+print(f"\n Test dataset statistics:")
 print(f"  Unique users: {n_users:,}")
 print(f"  Unique jobs: {n_jobs:,}")
 print(f"  Positive labels (label_pref=1): {n_positives:,}")
 print(f"  Negative labels (label_pref=0): {n_negatives:,}")
 print(f"  Pos/Neg ratio: 1:{n_negatives/n_positives:.1f}")
 
-# ========================================
-# SAMPLE IN-CONTEXT LEARNING EXAMPLES
-# ========================================
+
 print("\n" + "=" * 100)
 print("SAMPLING IN-CONTEXT LEARNING EXAMPLES")
 print("=" * 100)
 
-# Get 2 users with both positive and negative examples
 example_users = []
 for user_id, group in pref_train_df.groupby('user'):
     n_pos = (group['label_pref'] == 1).sum()
@@ -140,16 +109,15 @@ for user_id in example_users:
         'user_id': user_id,
         'item_id': pos_sample['item'],
         'label': 1,
-        'score': 0.9  # High score for positive
+        'score': 0.9  
     })
     
-    # Get 1 negative from same user
     neg_sample = user_data[user_data['label_pref'] == 0].sample(n=1, random_state=42).iloc[0]
     icl_examples.append({
         'user_id': user_id,
         'item_id': neg_sample['item'],
         'label': 0,
-        'score': 0.1  # Low score for negative
+        'score': 0.1  
     })
 
 print(f"\n✓ Sampled {len(icl_examples)} ICL examples:")
@@ -157,19 +125,12 @@ for i, ex in enumerate(icl_examples, 1):
     label_str = "POSITIVE" if ex['label'] == 1 else "NEGATIVE"
     print(f"  {i}. User {ex['user_id']}, Item {ex['item_id']}, {label_str}, Score {ex['score']}")
 
-# ========================================
-# PREPARE BATCHES (USER-CENTRIC)
-# ========================================
+
 print("\n" + "=" * 100)
 print("PREPARING BATCHES")
 print("=" * 100)
 
 def prepare_pref_batches(df, max_negatives=49):
-    """
-    Prepare user-centric batches for preference data.
-    Each batch: 1 user, 1 positive job + N negative jobs
-    Uses 'label_pref' column.
-    """
     batches = []
     user_groups = df.groupby('user')
     
@@ -193,20 +154,16 @@ def prepare_pref_batches(df, max_negatives=49):
     
     return batches
 
-# Prepare test batches
 pref_test_batches = prepare_pref_batches(pref_test_df, NEGATIVES_PER_SAMPLE)
 
 print(f"\n✓ User-centric PREF batches (1 user, 1 pos job + N neg jobs each):")
 print(f"  Test batches: {len(pref_test_batches):,}")
 
-# Analyze batches
 user_ids = [b['user_id'] for b in pref_test_batches]
 print(f"  Unique users: {len(set(user_ids))}")
 print(f"  Batches per user (avg): {len(pref_test_batches) / len(set(user_ids)):.1f}")
 
-# ========================================
-# VERIFY BATCH STRUCTURE
-# ========================================
+
 print("\n" + "=" * 100)
 print("BATCH VERIFICATION - First 2 Batches")
 print("=" * 100)
@@ -249,9 +206,7 @@ print(f"\n{'='*80}")
 print("VERIFICATION COMPLETE")
 print(f"{'='*80}")
 
-# ========================================
-# PROMPT BUILDER WITH ICL
-# ========================================
+
 def format_features(features_dict):
     """Convert features dict to readable string."""
     lines = []
@@ -269,7 +224,6 @@ def build_icl_prompt(user_id, item_id, examples):
     
     examples: list of dicts with keys 'user_id', 'item_id', 'label', 'score'
     """
-    # Build examples section
     examples_text = "Here are some examples of user-item ratings:\n\n"
     
     for i, ex in enumerate(examples, 1):
@@ -316,9 +270,7 @@ Rating:"""
     
     return prompt
 
-# ========================================
-# SCORE EXTRACTION
-# ========================================
+
 def extract_score(response):
     """Extract numeric score from text response - STRICT numeric only."""
     response = response.strip()
@@ -656,21 +608,11 @@ else:
     print(f"    Avg Rank:  {averaged_metrics['avg_rank_mean']:.2f}")
     print(f"    Parse Rate: {averaged_metrics['parse_success_rate_mean']:.1%}")
 
-# Random baseline comparison
-random_baseline_rank = (NEGATIVES_PER_SAMPLE + 1) / 2
-print(f"\n📊 vs Random Baseline:")
-print(f"  Random avg rank:      {random_baseline_rank:.1f}/50")
-print(f"  ICL Llama rank:       {averaged_metrics['avg_rank_mean']:.1f}/50")
-print(f"  Improvement:          {random_baseline_rank - averaged_metrics['avg_rank_mean']:.1f} ranks")
 
-# ========================================
-# SAVE RESULTS
-# ========================================
 print("\n" + "=" * 100)
 print("SAVING RESULTS")
 print("=" * 100)
 
-# Save overall results with all runs
 results = {
     'model': 'baseline_llama3_8b_instruct_icl',
     'dataset': PREF_TEST_CSV,
@@ -701,12 +643,7 @@ results = {
         }
         for i in range(NUM_RUNS)
     ],
-    'averaged_metrics': {k: float(v) for k, v in averaged_metrics.items()},
-    'baseline_comparison': {
-        'random_avg_rank': float(random_baseline_rank),
-        'icl_llama_avg_rank': float(averaged_metrics['avg_rank_mean']),
-        'improvement_over_random': float(random_baseline_rank - averaged_metrics['avg_rank_mean'])
-    }
+    'averaged_metrics': {k: float(v) for k, v in averaged_metrics.items()}
 }
 
 json_file = os.path.join(OUTPUT_DIR, "baseline_user_ranking_pref_icl.json")
@@ -751,9 +688,9 @@ if all_runs_scores_data[0]:
     print(f"✓ Scores from Run 1: {scores_csv} ({len(scores_df)} batches)")
 
 print("\n" + "=" * 100)
-print("IN-CONTEXT LEARNING BASELINE EVALUATION COMPLETE! 🎉")
+print("IN-CONTEXT LEARNING BASELINE EVALUATION COMPLETE! ")
 print("=" * 100)
-print(f"\n💡 Summary:")
+print(f"\n Summary:")
 print(f"  - Tested on {len(pref_test_batches)} batches from test.csv (PREFERENCE DATA)")
 print(f"  - Used {NUM_ICL_EXAMPLES} in-context examples in every prompt")
 print(f"  - ICL examples from users: {example_users}")
