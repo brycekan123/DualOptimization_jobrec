@@ -14,59 +14,57 @@ from transformers import BitsAndBytesConfig
 import numpy as np
 from tqdm import tqdm
 from datetime import datetime
+import argparse
 
-# ========================================
-# CONFIGURATION
-# ========================================
-HF_TOKEN = ""
+parser = argparse.ArgumentParser(description='Stage 2 training script')
+parser.add_argument('--pipeline_output', type=str, required=True,
+                    help='Path to pipeline_output directory (e.g., ../pipeline_output)')
+parser.add_argument('--data_dir', type=str, default='stage1a_data',
+                    help='Name of the data subdirectory (default: stage1a_data)')
+parser.add_argument('--hf_token', type=str, required=True,
+                    help='HuggingFace API token for model access')
+parser.add_argument('--stage1b_checkpoint', type=str, required=True,
+                    help='Path to Stage 1B checkpoint directory (e.g., ../12_19_multitask_stage1B/stage1b_multitask_output/5e-5_head_LoRA/checkpoint_epoch3)')
+args = parser.parse_args()
+
+
+HF_TOKEN = args.hf_token
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
-# Stage 1B checkpoint - FIXED PATHS
-# Get absolute paths to avoid confusion
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # stage2_12_21/
-PARENT_DIR = os.path.dirname(SCRIPT_DIR)  # LLama_3.2_implementation/
-STAGE1B_DIR = os.path.join(PARENT_DIR, "12_19_multitask_stage1B")
-
-STAGE1B_CHECKPOINT = os.path.join(STAGE1B_DIR, "stage1b_multitask_output/5e-5_head_LoRA/checkpoint_epoch3")
+STAGE1B_CHECKPOINT = args.stage1b_checkpoint
 STAGE1B_LORA_PATH = os.path.join(STAGE1B_CHECKPOINT, "lora_adapters")
 STAGE1B_PREF_HEAD = os.path.join(STAGE1B_CHECKPOINT, "pref_head.pt")
 STAGE1B_QUAL_HEAD = os.path.join(STAGE1B_CHECKPOINT, "qual_head.pt")
 
-# Data paths (relative to stage2_12_21/)
-DATA_DIR = "stage1a_data"
-PREF_TRAIN_CSV = os.path.join(PARENT_DIR, "pipeline_output", DATA_DIR, "train.csv")
-PREF_TEST_CSV = os.path.join(PARENT_DIR, "pipeline_output", DATA_DIR, "test.csv")
-QUAL_TEST_CSV = os.path.join(PARENT_DIR, "pipeline_output", DATA_DIR, "qual_test.csv")
-USER_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_users.csv")
-ITEM_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_items.csv")
+PIPELINE_OUTPUT = args.pipeline_output
+DATA_DIR = args.data_dir
 
-# Training settings
-NEGATIVES_PER_USER = 49  # Match Stage 1B
-MAX_SEQ_LENGTH = 1000  # Match ground truth eval_checkpoint.py
-PROCESS_CHUNK_SIZE = 5  # Match ground truth eval_checkpoint.py
-LEARNING_RATE = 1e-4  # REDUCED from 1e-3 to prevent NaN
-NUM_EPOCHS = 20  # Increased for better Lagrangian convergence
-NUM_TRAIN_BATCHES = 68  # Match Stage 1B (random sample, seed=42)
+PREF_TRAIN_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "train.csv")
+PREF_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "test.csv")
+QUAL_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "qual_test.csv")
+USER_FILE = os.path.join(PIPELINE_OUTPUT, "Final_users.csv")
+ITEM_FILE = os.path.join(PIPELINE_OUTPUT, "Final_items.csv")
 
-# Lagrangian hyperparameters
-TAU = 0.01  # Target qualification rate (~1%, moderate challenge based on qual_head predictions)
-ETA_MU = 0.01  # Learning rate for μ updates
-TEMPERATURE = 1.0  # Softmax temperature
-LAMBDA_CLAMP = 5.0  # ADDED: Clamp lambda to [-5, 5] to prevent explosions
+NEGATIVES_PER_USER = 49
+MAX_SEQ_LENGTH = 1000
+PROCESS_CHUNK_SIZE = 5
+LEARNING_RATE = 1e-4
+NUM_EPOCHS = 20
+NUM_TRAIN_BATCHES = 68
 
-# Batch sampling
-NUM_TRAIN_BATCHES = 68  # Match multi-task Stage 1B (random sample, seed=42)
-# NUM_TEST_BATCHES: Use ALL test batches (no cap)
+TAU = 0.01
+ETA_MU = 0.01
+TEMPERATURE = 1.0
+LAMBDA_CLAMP = 5.0
 
-# Output directory
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, f"stage2_output/run_tau_0.01")
+NUM_TRAIN_BATCHES = 68
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, f"stage2_output/run_tau_{TAU}")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ========================================
-# PATH VERIFICATION
-# ========================================
-# Save config
+
 with open(os.path.join(OUTPUT_DIR, "config.txt"), 'w') as f:
     f.write(f"TAU: {TAU} (~{TAU*100:.1f}% expected qualification rate)\n")
     f.write(f"  NOTE: TAU set manually (see pre-training diagnostic for data-derived recommendation)\n")
@@ -85,20 +83,14 @@ with open(os.path.join(OUTPUT_DIR, "config.txt"), 'w') as f:
     f.write(f"- Learning rate reduced to {LEARNING_RATE} for stability\n")
     f.write(f"- Checkpoints saved every 2 epochs\n")
 
-# ========================================
-# DEVICE SETUP
-# ========================================
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("\n" + "=" * 100)
 print("STAGE 2: LAGRANGIAN POLICY TRAINING (FIXED)")
 print("=" * 100)
-print(f"\n🖥️  Device: {device}")
-if torch.cuda.is_available():
-    print(f"   GPU: {torch.cuda.get_device_name(0)}")
 
-# ========================================
-# LOAD DATA
-# ========================================
+
+
 print("\n" + "=" * 100)
 print("LOADING DATA")
 print("=" * 100)
@@ -178,11 +170,7 @@ def prepare_pref_batches(df, negatives_per_user=49):
     return batches
 
 def prepare_qual_batches(df, max_negatives=49):
-    """
-    Prepare job-centric batches for qualification data.
-    Each batch: 1 job, 1 positive user + N negative users
-    Uses 'label_qual' column.
-    """
+    
     batches = []
     job_groups = df.groupby('item')
     
@@ -209,7 +197,6 @@ def prepare_qual_batches(df, max_negatives=49):
 pref_train_batches_all = prepare_pref_batches(pref_train_df, NEGATIVES_PER_USER)
 pref_test_batches = prepare_pref_batches(pref_test_df, NEGATIVES_PER_USER)
 
-# Randomly sample 68 pref batches with FIXED SEED for reproducibility (MATCHES STAGE 1B)
 np.random.seed(42)
 pref_train_indices = np.random.choice(len(pref_train_batches_all), size=NUM_TRAIN_BATCHES, replace=False)
 pref_train_batches = [pref_train_batches_all[i] for i in pref_train_indices]
@@ -379,9 +366,7 @@ print(f"  lambda_head params: {sum(p.numel() for p in lambda_head.parameters()):
 print(f"  lambda_head initialized with zero bias (outputs near 0 initially)")
 print(f"  lambda_head will be CLAMPED to [-{LAMBDA_CLAMP}, {LAMBDA_CLAMP}]")
 
-# ========================================
-# TRAINING UTILITIES
-# ========================================
+
 def pool_hidden_states(hidden_states, attention_mask):
     """Extract last non-padding token."""
     batch_size = hidden_states.shape[0]
@@ -472,9 +457,7 @@ def encode_user_item_pairs(user_id, items, model, tokenizer):
     
     return embeddings_batch
 
-# ========================================
-# EVALUATION (for verification ONLY - just testing checkpoint)
-# ========================================
+
 def evaluate_pref_checkpoint(batches, model, head, desc="Evaluating Pref"):
     """Evaluate on label_pref batches. EXACT copy from eval_checkpoint.py"""
     model.eval()
@@ -723,35 +706,27 @@ def evaluate_pref(batches, model, pref_head, qual_head, lambda_head,
         for batch_idx, batch in enumerate(tqdm(batches, desc=desc, ncols=100)):
             user_id = batch['user_id']
             all_items = [batch['positive_item']] + batch['negative_items']
-            
             # Encode all (user, item) pairs
             h = encode_user_item_pairs(user_id, all_items, model, tokenizer)
-            
             # Get scores from all three heads
             s_pref = pref_head(h).squeeze()
             qual_logit = qual_head(h).squeeze()
             p_qual = torch.sigmoid(qual_logit)
             lambda_uj = lambda_head(h).squeeze()
-            
             # CLAMP lambda (prevent explosions)
             lambda_uj = torch.clamp(lambda_uj, min=-LAMBDA_CLAMP, max=LAMBDA_CLAMP)
-            
             # Final score
             s_qual = qual_logit
             s_final = s_pref + lambda_uj * s_qual
-            
             # InfoNCE loss
             loss = info_nce_loss(s_final)
             all_losses.append(loss.item())
-            
             # Qualification constraint
             Pi = torch.softmax(s_final / TEMPERATURE, dim=0)
             C_qual_pred = torch.sum(Pi * p_qual)
             all_c_qual_preds.append(C_qual_pred.item())
-            
             # Calculate rank of positive (index 0)
             rank = (s_final[0] < s_final[1:]).sum().item() + 1
-            
             # Check if positive has label_pref=1
             pos_item = all_items[0]
             has_pref = ((pref_test_df['user'] == user_id) & 
@@ -759,18 +734,15 @@ def evaluate_pref(batches, model, pref_head, qual_head, lambda_head,
                        (pref_test_df['label_pref'] == 1)).any()
             if has_pref:
                 pref_ranks.append(rank)
-            
             if (batch_idx + 1) % 5 == 0:
                 torch.cuda.empty_cache()
-    
     # Calculate metrics
     results = {
         'loss': np.mean(all_losses),
         'c_qual_pred_mean': np.mean(all_c_qual_preds),
         'c_qual_pred_std': np.std(all_c_qual_preds),
     }
-    
-    # Over/under qualified batch percentages
+
     c_qual_array = np.array(all_c_qual_preds)
     over_qualified = (c_qual_array > TAU).sum()
     under_qualified = (c_qual_array < TAU).sum()
@@ -784,22 +756,11 @@ def evaluate_pref(batches, model, pref_head, qual_head, lambda_head,
     
     return results
 
-# ========================================
-# VERIFICATION EVAL (Check Checkpoint Loaded Correctly)
-# ========================================
-print("\n" + "=" * 100)
-print("VERIFICATION EVAL - TESTING STAGE 1B CHECKPOINT")
-print("=" * 100)
-print("Testing if Stage 1B checkpoint loaded correctly")
-print("Evaluating heads independently (NO Stage 2 training yet)\n")
 
-# ========================================
-# 1. QUAL TEST (qual_test_df) - JOB-CENTRIC
-# ========================================
 print("=" * 80)
 print("1. LABEL_QUAL VERIFICATION (job-centric batches)")
 print("=" * 80)
-print("Preparing qual test batches from qual_test_df...")
+
 
 # Prepare qual test batches (job-centric: 1 job, multiple users)
 qual_verify_batches = prepare_qual_batches(qual_test_df)
@@ -818,7 +779,7 @@ qual_verify_results = evaluate_qual_checkpoint(
     desc="Qual Verification"
 )
 
-print(f"\n📊 QUAL VERIFICATION RESULTS:")
+print(f"\n QUAL VERIFICATION RESULTS:")
 print(f"  Loss: {qual_verify_results['loss']:.4f}")
 
 if 'recall@1' in qual_verify_results:
@@ -827,9 +788,7 @@ if 'recall@1' in qual_verify_results:
 else:
     print(f"  ⚠️  WARNING: No samples found!")
 
-# ========================================
-# 2. PREF TEST (pref_test_df) - USER-CENTRIC
-# ========================================
+
 print("\n" + "=" * 80)
 print("2. LABEL_PREF VERIFICATION (user-centric batches)")
 print("=" * 80)
@@ -862,9 +821,7 @@ print("  Pref_head: Ranks preferred jobs for users")
 print("  Both heads from Stage 1B are working correctly")
 print("  Ready to start Stage 2 training...\n")
 
-# ========================================
-# TRAINING LOOP
-# ========================================
+
 print("\n" + "=" * 100)
 print("TRAINING")
 print("=" * 100)
@@ -875,7 +832,6 @@ optimizer = torch.optim.AdamW(
     lr=LEARNING_RATE
 )
 
-# Initialize Lagrange multiplier
 mu = 0.0
 
 print(f"\nConfiguration:")
@@ -944,8 +900,6 @@ for epoch in range(NUM_EPOCHS):
     epoch_constraint = 0
     epoch_c_qual = 0
     epoch_lambda_stats = []
-    
-    # Additional diagnostics
     epoch_score_stats = {
         's_pref': [], 's_qual': [], 's_final': [], 'lambda': []
     }
@@ -1101,16 +1055,11 @@ for epoch in range(NUM_EPOCHS):
         }, os.path.join(checkpoint_dir, "training_state.pt"))
         
         print(f"\n✓ Saved checkpoint: {checkpoint_dir}")
-    
-    # ========================================
-    # INTERMEDIATE EVALUATION (full Lagrangian policy)
-    # ========================================
+   
     print(f"\n{'='*80}")
     print(f"EPOCH {epoch+1} INTERMEDIATE EVALUATION")
     print(f"{'='*80}")
-    print("Evaluating full Lagrangian policy: s_final = s_pref + λ*s_qual")
-    
-    # Prepare eval batches (use same as verification)
+
     qual_test_batches_all = prepare_qual_batches(qual_test_df)
     qual_intermediate_batches = qual_test_batches_all[:30]
     pref_intermediate_batches = pref_test_batches[:50]
@@ -1124,7 +1073,7 @@ for epoch in range(NUM_EPOCHS):
         desc=f"Epoch {epoch+1} Qual"
     )
     
-    print(f"\n📊 Epoch {epoch+1} - QUAL Results (30 batches):")
+    print(f"\n Epoch {epoch+1} - QUAL Results (30 batches):")
     print(f"  Recall: R@1={qual_intermediate_results.get('qual_recall@1', 0):.3f} | R@3={qual_intermediate_results.get('qual_recall@3', 0):.3f} | R@5={qual_intermediate_results.get('qual_recall@5', 0):.3f} | R@10={qual_intermediate_results.get('qual_recall@10', 0):.3f} | R@20={qual_intermediate_results.get('qual_recall@20', 0):.3f}")
     print(f"  NDCG:   N@1={qual_intermediate_results.get('qual_ndcg@1', 0):.3f} | N@3={qual_intermediate_results.get('qual_ndcg@3', 0):.3f} | N@5={qual_intermediate_results.get('qual_ndcg@5', 0):.3f} | N@10={qual_intermediate_results.get('qual_ndcg@10', 0):.3f} | N@20={qual_intermediate_results.get('qual_ndcg@20', 0):.3f}")
     print(f"  Avg Rank: {qual_intermediate_results.get('qual_avg_rank', 0):.1f}")
@@ -1140,8 +1089,7 @@ for epoch in range(NUM_EPOCHS):
         pref_test_df, qual_test_df,
         desc=f"Epoch {epoch+1} Pref"
     )
-    
-    print(f"\n📊 Epoch {epoch+1} - PREF Results (50 batches):")
+    print(f"\n Epoch {epoch+1} - PREF Results (50 batches):")
     print(f"  Recall: R@1={pref_intermediate_results['pref_recall@1']:.3f} | R@3={pref_intermediate_results['pref_recall@3']:.3f} | R@5={pref_intermediate_results['pref_recall@5']:.3f} | R@10={pref_intermediate_results['pref_recall@10']:.3f} | R@20={pref_intermediate_results['pref_recall@20']:.3f}")
     print(f"  NDCG:   N@1={pref_intermediate_results['pref_ndcg@1']:.3f} | N@3={pref_intermediate_results['pref_ndcg@3']:.3f} | N@5={pref_intermediate_results['pref_ndcg@5']:.3f} | N@10={pref_intermediate_results['pref_ndcg@10']:.3f} | N@20={pref_intermediate_results['pref_ndcg@20']:.3f}")
     print(f"  Avg Rank: {pref_intermediate_results['pref_avg_rank']:.1f}")
@@ -1160,10 +1108,7 @@ for epoch in range(NUM_EPOCHS):
     
     print(f"  Loss: {pref_intermediate_results['loss']:.4f} | μ={mu:.4f} | λ={current_lambda_mean:.3f} | {delta_str}")
     
-    # Save intermediate eval results for best epoch tracking and convergence analysis
     intermediate_eval_results['epoch'].append(epoch+1)
-    
-    # Ranking metrics
     intermediate_eval_results['pref_recall@5'].append(pref_intermediate_results.get('pref_recall@5', 0.0))
     intermediate_eval_results['pref_ndcg@5'].append(pref_intermediate_results.get('pref_ndcg@5', 0.0))
     intermediate_eval_results['qual_recall@5'].append(qual_intermediate_results.get('qual_recall@5', 0.0))
@@ -1188,9 +1133,6 @@ for epoch in range(NUM_EPOCHS):
     # Loss
     intermediate_eval_results['loss'].append(pref_intermediate_results['loss'])
 
-# ========================================
-# EPOCH PROGRESSION TABLE (Convergence Analysis)
-# ========================================
 print("\n" + "=" * 100)
 print("EPOCH PROGRESSION - CONVERGENCE ANALYSIS")
 print("=" * 100)
@@ -1219,23 +1161,6 @@ if len(intermediate_eval_results['epoch']) > 0:
               f"{delta_str:<9} "
               f"{intermediate_eval_results['loss'][i]:.4f}")
     
-    # Convergence summary
-    if len(intermediate_eval_results['epoch']) >= 3:
-        last_3_deltas = intermediate_eval_results['lambda_delta'][-3:]
-        avg_delta = np.mean([abs(d) for d in last_3_deltas if d != 0])
-        last_gap = intermediate_eval_results['constraint_gap'][-1]
-        
-        print(f"\n📊 Convergence Status:")
-        if avg_delta < 0.01:
-            print(f"  ✓ Lambda stabilized (avg |Δλ| in last 3 epochs: {avg_delta:.4f})")
-        else:
-            print(f"  ⚠ Lambda still changing (avg |Δλ| in last 3 epochs: {avg_delta:.4f})")
-        
-        if last_gap < 0.0005:
-            print(f"  ✓ Constraint satisfied (|τ-C_qual|: {last_gap:.5f} < 0.0005)")
-        else:
-            print(f"  ⚠ Constraint not fully satisfied (|τ-C_qual|: {last_gap:.5f})")
-
 print("=" * 100)
 
 # ========================================
@@ -1252,7 +1177,7 @@ if len(intermediate_eval_results['epoch']) > 0:
     best_qual_recall5_idx = np.argmax(intermediate_eval_results['qual_recall@5'])
     best_qual_ndcg5_idx = np.argmax(intermediate_eval_results['qual_ndcg@5'])
     
-    print(f"\n📊 Best Epochs by Metric:")
+    print(f"\n Best Epochs by Metric:")
     print(f"\n  PREF (user-centric):")
     print(f"    Best Recall@5: Epoch {intermediate_eval_results['epoch'][best_pref_recall5_idx]} ({intermediate_eval_results['pref_recall@5'][best_pref_recall5_idx]:.3f})")
     print(f"    Best NDCG@5:   Epoch {intermediate_eval_results['epoch'][best_pref_ndcg5_idx]} ({intermediate_eval_results['pref_ndcg@5'][best_pref_ndcg5_idx]:.3f})")
@@ -1275,32 +1200,30 @@ if len(intermediate_eval_results['epoch']) > 0:
     best_overall_idx = np.argmax(epoch_scores)
     best_overall_epoch = intermediate_eval_results['epoch'][best_overall_idx]
     
-    print(f"\n  🏆 OVERALL BEST EPOCH: {best_overall_epoch}")
+    print(f"\n  OVERALL BEST EPOCH: {best_overall_epoch}")
     print(f"     Average of 4 key metrics: {epoch_scores[best_overall_idx]:.3f}")
     print(f"     Checkpoint: checkpoint_epoch{best_overall_epoch}/lambda_head.pt")
-    
+
     # Show all epochs for comparison
-    print(f"\n📈 All Epochs Comparison (sorted by overall score):")
+    print(f"\n All Epochs Comparison (sorted by overall score):")
     print(f"  {'Epoch':<8} {'Pref R@5':<10} {'Pref N@5':<10} {'Qual R@5':<10} {'Qual N@5':<10} {'Avg':<10}")
     print(f"  {'-'*58}")
-    
+
     # Sort by avg score descending
     sorted_indices = np.argsort(epoch_scores)[::-1]
     for idx in sorted_indices:
         epoch_num = intermediate_eval_results['epoch'][idx]
-        marker = "🏆" if idx == best_overall_idx else "  "
+        marker = "**" if idx == best_overall_idx else "  "
         print(f"{marker} Epoch {epoch_num:<3} "
-              f"{intermediate_eval_results['pref_recall@5'][idx]:.3f}      "
-              f"{intermediate_eval_results['pref_ndcg@5'][idx]:.3f}      "
-              f"{intermediate_eval_results['qual_recall@5'][idx]:.3f}      "
-              f"{intermediate_eval_results['qual_ndcg@5'][idx]:.3f}      "
-              f"{epoch_scores[idx]:.3f}")
+            f"{intermediate_eval_results['pref_recall@5'][idx]:.3f}      "
+            f"{intermediate_eval_results['pref_ndcg@5'][idx]:.3f}      "
+            f"{intermediate_eval_results['qual_recall@5'][idx]:.3f}      "
+            f"{intermediate_eval_results['qual_ndcg@5'][idx]:.3f}      "
+            f"{epoch_scores[idx]:.3f}")
 
 print("=" * 100)
 
-# ========================================
-# FINAL EVALUATION - BEST EPOCH ON FULL TEST SET
-# ========================================
+
 if len(intermediate_eval_results['epoch']) > 0:
     print("\n" + "=" * 100)
     print("FINAL EVALUATION - BEST EPOCH ON FULL TEST SET")
@@ -1308,7 +1231,7 @@ if len(intermediate_eval_results['epoch']) > 0:
     
     # Load best checkpoint
     best_checkpoint_dir = os.path.join(OUTPUT_DIR, f"checkpoint_epoch{best_overall_epoch}")
-    print(f"\n📥 Loading best checkpoint: Epoch {best_overall_epoch}")
+    print(f"\n Loading best checkpoint: Epoch {best_overall_epoch}")
     print(f"   Path: {best_checkpoint_dir}")
     
     # Load lambda_head from best epoch
@@ -1355,7 +1278,7 @@ if len(intermediate_eval_results['epoch']) > 0:
         desc="Final QUAL Eval"
     )
     
-    print(f"\n📊 FINAL QUAL RESULTS ({len(qual_test_batches_all)} batches):")
+    print(f"\n FINAL QUAL RESULTS ({len(qual_test_batches_all)} batches):")
     print(f"  Recall: R@1={qual_final_results.get('qual_recall@1', 0):.3f} | R@3={qual_final_results.get('qual_recall@3', 0):.3f} | R@5={qual_final_results.get('qual_recall@5', 0):.3f} | R@10={qual_final_results.get('qual_recall@10', 0):.3f} | R@20={qual_final_results.get('qual_recall@20', 0):.3f}")
     print(f"  NDCG:   N@1={qual_final_results.get('qual_ndcg@1', 0):.3f} | N@3={qual_final_results.get('qual_ndcg@3', 0):.3f} | N@5={qual_final_results.get('qual_ndcg@5', 0):.3f} | N@10={qual_final_results.get('qual_ndcg@10', 0):.3f} | N@20={qual_final_results.get('qual_ndcg@20', 0):.3f}")
     print(f"  Avg Rank: {qual_final_results.get('qual_avg_rank', 0):.1f}")
@@ -1376,7 +1299,7 @@ if len(intermediate_eval_results['epoch']) > 0:
         desc="Final PREF Eval"
     )
     
-    print(f"\n📊 FINAL PREF RESULTS ({len(pref_test_batches)} batches):")
+    print(f"\n FINAL PREF RESULTS ({len(pref_test_batches)} batches):")
     print(f"  Recall: R@1={pref_final_results['pref_recall@1']:.3f} | R@3={pref_final_results['pref_recall@3']:.3f} | R@5={pref_final_results['pref_recall@5']:.3f} | R@10={pref_final_results['pref_recall@10']:.3f} | R@20={pref_final_results['pref_recall@20']:.3f}")
     print(f"  NDCG:   N@1={pref_final_results['pref_ndcg@1']:.3f} | N@3={pref_final_results['pref_ndcg@3']:.3f} | N@5={pref_final_results['pref_ndcg@5']:.3f} | N@10={pref_final_results['pref_ndcg@10']:.3f} | N@20={pref_final_results['pref_ndcg@20']:.3f}")
     print(f"  Avg Rank: {pref_final_results['pref_avg_rank']:.1f}")
@@ -1385,7 +1308,7 @@ if len(intermediate_eval_results['epoch']) > 0:
     print(f"  Loss: {pref_final_results['loss']:.4f}")
     
     print(f"\n{'='*100}")
-    print(f"🏆 FINAL EVALUATION COMPLETE - EPOCH {best_overall_epoch}")
+    print(f" FINAL EVALUATION COMPLETE - EPOCH {best_overall_epoch}")
     print(f"{'='*100}")
     
     # Save final results
@@ -1402,7 +1325,7 @@ else:
     final_results_summary = None
 
 # Save final model and results
-print("\n📦 Saving final model...")
+print("\n Saving final model...")
 
 # Save best lambda_head (if final eval was run)
 if final_results_summary is not None:
@@ -1457,8 +1380,7 @@ if final_results_summary is not None:
     final_summary_df.to_csv(os.path.join(OUTPUT_DIR, "final_results_summary.csv"), index=False)
     print(f"✓ Saved final results summary to: final_results_summary.csv")
 
-print(f"\n✅ All files saved to: {OUTPUT_DIR}")
-
+print(f"\n All files saved to: {OUTPUT_DIR}")
 print("\n" + "=" * 100)
 print("STAGE 2 COMPLETE!")
 print("=" * 100)
