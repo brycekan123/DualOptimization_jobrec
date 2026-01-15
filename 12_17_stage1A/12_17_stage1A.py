@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""
-Stage 1A: Preference Expert Training
-=====================================
-Train LLaMA encoder + LoRA + MLP pref_head on label_pref (with hard negatives)
-
-Data Structure:
-- 1 user per batch
-- 1 positive (label_pref=1) + 49 hard negatives (label_pref=0, scores in [10,14))
-
-Training:
-- Finetune LoRA adapters + MLP pref_head on label_pref using InfoNCE
-
-Eval:
-- Recall@1,3,5 and NDCG@1,3,5 on label_pref test set
-- Cross-eval: Recall@1,3,5 and NDCG@1,3,5 on label_qual test set (expect worse)
-"""
 
 import os
 import pandas as pd
@@ -26,61 +10,47 @@ from transformers import BitsAndBytesConfig
 import numpy as np
 from tqdm import tqdm
 from datetime import datetime
+import argparse
 
-# ========================================
-# CONFIGURATION
-# ========================================
-HF_TOKEN = ""
+parser = argparse.ArgumentParser(description='Train Stage 1A LLM-based recommender model')
+parser.add_argument('--pipeline_output', type=str, required=True,
+                    help='Path to pipeline_output directory (e.g., ../pipeline_output)')
+parser.add_argument('--data_dir', type=str, default='stage1a_data',
+                    help='Name of the data subdirectory (default: stage1a_data)')
+parser.add_argument('--hf_token', type=str, required=True,
+                    help='HuggingFace API token for model access')
+args = parser.parse_args()
+
+HF_TOKEN = args.hf_token
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
-# Data paths
-DATA_DIR = "stage1a_data"
-TRAIN_CSV = f"../pipeline_output/{DATA_DIR}/train.csv"
-TEST_CSV = f"../pipeline_output/{DATA_DIR}/test.csv"
-VAL_CSV = f"../pipeline_output/{DATA_DIR}/val.csv"
-QUAL_TEST_CSV = f"../pipeline_output/{DATA_DIR}/qual_test.csv"  # For cross-eval
-USER_FILE = "../pipeline_output/Final_users.csv"
-ITEM_FILE = "../pipeline_output/Final_items.csv"
+PIPELINE_OUTPUT = args.pipeline_output
+DATA_DIR = args.data_dir
+
+TRAIN_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "train.csv")
+TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "test.csv")
+VAL_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "val.csv")
+QUAL_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "qual_test.csv")  # For cross-eval
+USER_FILE = os.path.join(PIPELINE_OUTPUT, "Final_users.csv")
+ITEM_FILE = os.path.join(PIPELINE_OUTPUT, "Final_items.csv")
 NEGATIVES_PER_USER = 49
 MAX_SEQ_LENGTH = 1000
 PROCESS_CHUNK_SIZE = 10
 LEARNING_RATE = 5e-5
 NUM_EPOCHS = 3
-
-# Batch sampling (for faster training/testing)
 NUM_TRAIN_BATCHES = 250
 NUM_TEST_BATCHES = 250
-NUM_QUAL_TEST_BATCHES = 50  # Keep as-is, ~19 available
-
-# LoRA settings
+NUM_QUAL_TEST_BATCHES = 50  
 LORA_RANK = 16
 LORA_ALPHA = 32
 LORA_DROPOUT = 0.1
-
-# Output directory
 OUTPUT_DIR = f"stage1a_output/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ========================================
-# DEVICE SETUP
-# ========================================
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print("=" * 100)
-print("STAGE 1A: PREFERENCE EXPERT TRAINING")
-print("=" * 100)
-print(f"\n🖥️  Device: {device}")
-if torch.cuda.is_available():
-    print(f"   GPU: {torch.cuda.get_device_name(0)}")
 
-# ========================================
-# LOAD DATA
-# ========================================
-print("\n" + "=" * 100)
-print("LOADING DATA")
-print("=" * 100)
 
-# Load metadata
 user_df = pd.read_csv(USER_FILE)
 user_df = user_df[user_df['student_id'] != 'student_id']
 user_df = user_df[user_df['student_id'] != 'user_id:token']
@@ -91,10 +61,7 @@ item_df = item_df[item_df['job_id'] != 'job_id']
 item_df = item_df[item_df['job_id'] != 'item_id:token']
 item_dict = item_df.set_index('job_id').to_dict('index')
 
-print(f"✓ Loaded {len(user_dict):,} users")
-print(f"✓ Loaded {len(item_dict):,} items")
 
-# Load train/test/val data
 train_df = pd.read_csv(TRAIN_CSV)
 test_df = pd.read_csv(TEST_CSV)
 val_df = pd.read_csv(VAL_CSV)
@@ -108,17 +75,7 @@ print(f"  Test positives: {(test_df['label_pref']==1).sum():,}")
 
 # Load qual test for cross-eval
 qual_test_df = pd.read_csv(QUAL_TEST_CSV)
-print(f"\n✓ Label_qual test (for cross-eval):")
-print(f"  Samples: {len(qual_test_df):,}")
-print(f"  Jobs: {qual_test_df['item'].nunique():,}")
-print(f"  Positives: {(qual_test_df['label_qual']==1).sum():,}")
 
-# ========================================
-# PREPARE BATCHES
-# ========================================
-print("\n" + "=" * 100)
-print("PREPARING BATCHES")
-print("=" * 100)
 
 def prepare_pref_batches(df, negatives_per_user):
     """
@@ -198,11 +155,11 @@ train_batches = [train_batches[i] for i in np.random.choice(len(train_batches), 
 test_batches = [test_batches[i] for i in np.random.choice(len(test_batches), size=min(NUM_TEST_BATCHES, len(test_batches)), replace=False)]
 qual_test_batches = [qual_test_batches[i] for i in np.random.choice(len(qual_test_batches), size=min(NUM_QUAL_TEST_BATCHES, len(qual_test_batches)), replace=False)]
 
-print(f"✓ Label_pref batches (user-centric, sampled):")
+print(f"✓ Label_pref batches:")
 print(f"  Train: {len(train_batches):,}")
 print(f"  Test: {len(test_batches):,}")
 print(f"  Val: {len(val_batches):,}")
-print(f"\n✓ Label_qual batches (job-centric for cross-eval, sampled):")
+print(f"\n✓ Label_qual batches:")
 print(f"  Test: {len(qual_test_batches):,}")
 
 # ========================================
@@ -241,9 +198,7 @@ Interaction Likelihood:"""
     
     return prompt
 
-# ========================================
-# LOAD MODEL
-# ========================================
+
 print("\n" + "=" * 100)
 print("LOADING MODEL")
 print("=" * 100)
@@ -304,12 +259,7 @@ pref_head = nn.Sequential(
     nn.Linear(256, 1)
 ).to(device)
 
-# Keep fp32 for proper gradient computation
-print(f"\n✓ Preference head: {sum(p.numel() for p in pref_head.parameters()):,} params")
 
-# ========================================
-# TRAINING UTILITIES
-# ========================================
 def pool_hidden_states(hidden_states, attention_mask):
     """Extract last non-padding token."""
     batch_size = hidden_states.shape[0]
@@ -363,8 +313,6 @@ def evaluate_pref(batches, model, pref_head, desc="Evaluating"):
         for batch_idx, batch in enumerate(tqdm(batches, desc=desc, ncols=100)):
             user_id = batch['user_id']
             all_items = [batch['positive_item']] + batch['negative_items']
-            
-            # Process in chunks
             item_chunks = [all_items[i:i+PROCESS_CHUNK_SIZE] 
                           for i in range(0, len(all_items), PROCESS_CHUNK_SIZE)]
             all_embeddings = []
@@ -453,11 +401,9 @@ def evaluate_qual(batches, model, pref_head, desc="Evaluating Qual"):
                 del chunk_inputs, chunk_outputs, chunk_hidden
             
             embeddings_batch = torch.cat(all_embeddings, dim=0)
-            # Convert to fp32 for MLP head
             embeddings_batch = embeddings_batch.float()
             scores = pref_head(embeddings_batch).squeeze()
             
-            # Calculate rank (positive is at index 0)
             rank = (scores[0] < scores[1:]).sum().item() + 1
             all_ranks.append(rank)
             
@@ -467,71 +413,11 @@ def evaluate_qual(batches, model, pref_head, desc="Evaluating Qual"):
                 torch.cuda.empty_cache()
     
     metrics = calculate_metrics(all_ranks)
-    
     return metrics
 
-# ========================================
-# BASELINE EVALUATION
-# ========================================
-print("\n" + "=" * 100)
-print("BASELINE EVALUATION (SKIPPED FOR NOW)")
-print("=" * 100)
-
-# print("\n🔍 Evaluating on label_pref test...")
-# baseline_pref = evaluate_pref(test_batches, model, pref_head, desc="Baseline Pref")
-
-# print(f"\n📊 Baseline - Label_PREF Test:")
-# print(f"  Loss: {baseline_pref['loss']:.4f}")
-# print(f"  Recall@1: {baseline_pref['recall@1']:.3f} ({baseline_pref['recall@1']*100:.1f}%)")
-# print(f"  Recall@3: {baseline_pref['recall@3']:.3f} ({baseline_pref['recall@3']*100:.1f}%)")
-# print(f"  Recall@5: {baseline_pref['recall@5']:.3f} ({baseline_pref['recall@5']*100:.1f}%)")
-# print(f"  NDCG@1: {baseline_pref['ndcg@1']:.3f}")
-# print(f"  NDCG@3: {baseline_pref['ndcg@3']:.3f}")
-# print(f"  NDCG@5: {baseline_pref['ndcg@5']:.3f}")
-# print(f"  Avg Rank: {baseline_pref['avg_rank']:.1f}/50")
-
-# print("\n🔍 Cross-evaluating on label_qual test...")
-# baseline_qual = evaluate_qual(qual_test_batches, model, pref_head, desc="Baseline Qual")
-
-# print(f"\n📊 Baseline - Label_QUAL Test (cross-eval, expect bad):")
-# print(f"  Recall@1: {baseline_qual['recall@1']:.3f} ({baseline_qual['recall@1']*100:.1f}%)")
-# print(f"  Recall@3: {baseline_qual['recall@3']:.3f} ({baseline_qual['recall@3']*100:.1f}%)")
-# print(f"  Recall@5: {baseline_qual['recall@5']:.3f} ({baseline_qual['recall@5']*100:.1f}%)")
-# print(f"  NDCG@1: {baseline_qual['ndcg@1']:.3f}")
-# print(f"  NDCG@3: {baseline_qual['ndcg@3']:.3f}")
-# print(f"  NDCG@5: {baseline_qual['ndcg@5']:.3f}")
-# print(f"  Avg Rank: {baseline_qual['avg_rank']:.1f}")
-
-print("✓ Skipping baseline eval to start training immediately")
-
-print("\n🧹 Cleaning memory before training...")
-# ========================================
-# GPU MEMORY CHECK & CLEAR BEFORE TRAINING
-# ========================================
-def print_gpu_usage(tag=""):
-    if torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated() / 1e9
-        reserved  = torch.cuda.memory_reserved() / 1e9
-        print(f"[GPU USAGE {tag}] Allocated: {allocated:.2f} GB | Reserved: {reserved:.2f} GB")
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,nounits,noheader"],
-                capture_output=True, text=True
-            )
-            for i, line in enumerate(result.stdout.strip().split("\n")):
-                used, total = map(int, line.split(","))
-                print(f"  GPU {i}: {used/1024:.2f} GB / {total/1024:.2f} GB")
-        except Exception as e:
-            print(f"  ⚠️ Could not run nvidia-smi: {e}")
-
-print("\n🧪 GPU memory BEFORE training:")
+print("\n Cleaning memory before training...")
 torch.cuda.empty_cache()
-print_gpu_usage("before epoch 1")
 
-# ========================================
-# TRAINING LOOP
-# ========================================
 print("\n" + "=" * 100)
 print("TRAINING")
 print("=" * 100)
@@ -557,14 +443,9 @@ for epoch in range(NUM_EPOCHS):
     epoch_loss = 0
     pbar = tqdm(range(len(train_batches)), desc=f"Epoch {epoch+1}", ncols=100)
     
-    # For gradient checking on first batch
-    first_batch = True
-    
     for batch_idx, batch in enumerate(train_batches):
         user_id = batch['user_id']
         all_items = [batch['positive_item']] + batch['negative_items']
-        
-        # Process in chunks
         item_chunks = [all_items[i:i+PROCESS_CHUNK_SIZE] 
                       for i in range(0, len(all_items), PROCESS_CHUNK_SIZE)]
         all_embeddings = []
@@ -592,11 +473,8 @@ for epoch in range(NUM_EPOCHS):
             del chunk_inputs, chunk_outputs, chunk_hidden
         
         embeddings_batch = torch.cat(all_embeddings, dim=0)
-        # Convert to fp32 for MLP head
         embeddings_batch = embeddings_batch.float()
         scores = pref_head(embeddings_batch).squeeze()
-        
-        # InfoNCE loss
         loss = info_nce_loss(scores)
         optimizer.zero_grad()
         loss.backward()
@@ -605,31 +483,7 @@ for epoch in range(NUM_EPOCHS):
             max_norm=1.0
         )
         optimizer.step()
-        
-        # Check gradients on first batch
-        if first_batch:
-            print("\n🔍 GRADIENT CHECK (First Batch):")
-            
-            # Check MLP head gradients
-            mlp_grad_norm = torch.nn.utils.clip_grad_norm_(pref_head.parameters(), max_norm=float('inf'))
-            print(f"  MLP head gradient norm: {mlp_grad_norm:.6f}")
-            
-            # Check LoRA gradients
-            lora_grads = []
-            for name, param in model.named_parameters():
-                if param.requires_grad and 'lora' in name.lower():
-                    if param.grad is not None:
-                        lora_grads.append(param.grad.norm().item())
-            
-            if lora_grads:
-                print(f"  LoRA gradient norm (avg): {np.mean(lora_grads):.6f}")
-                print(f"  LoRA params with gradients: {len(lora_grads)}")
-            else:
-                print("  ⚠️  WARNING: No LoRA gradients found!")
-            
-            print(f"  Loss: {loss.item():.4f}\n")
-            first_batch = False
-        
+                
         epoch_loss += loss.item()
         pbar.update(1)
         pbar.set_postfix({'loss': f'{loss.item():.4f}'})
@@ -640,19 +494,16 @@ for epoch in range(NUM_EPOCHS):
             torch.cuda.empty_cache()
     
     pbar.close()
-    
-    # Save checkpoint
+ 
     checkpoint_dir = os.path.join(OUTPUT_DIR, f"checkpoint_epoch{epoch+1}")
     os.makedirs(checkpoint_dir, exist_ok=True)
     
     model.save_pretrained(os.path.join(checkpoint_dir, "lora_adapters"))
     torch.save(pref_head.state_dict(), os.path.join(checkpoint_dir, "pref_head.pt"))
     
-    print(f"✓ Saved checkpoint: {checkpoint_dir}")
+    print(f" Saved checkpoint: {checkpoint_dir}")
 
-# ========================================
-# FINAL EVALUATION
-# ========================================
+
 print("\n" + "=" * 100)
 print("FINAL EVALUATION")
 print("=" * 100)
@@ -661,7 +512,7 @@ print("=" * 100)
 print("\n🔍 Evaluating on label_pref test...")
 pref_metrics = evaluate_pref(test_batches, model, pref_head, desc="Final Pref Eval")
 
-print(f"\n📊 FINAL - Label_PREF Test:")
+print(f"\n FINAL - Label_PREF Test:")
 print(f"  Loss: {pref_metrics['loss']:.4f}")
 print(f"  Recall@1: {pref_metrics['recall@1']:.3f} ({pref_metrics['recall@1']*100:.1f}%)")
 print(f"  Recall@3: {pref_metrics['recall@3']:.3f} ({pref_metrics['recall@3']*100:.1f}%)")
@@ -672,10 +523,10 @@ print(f"  NDCG@5: {pref_metrics['ndcg@5']:.3f}")
 print(f"  Avg Rank: {pref_metrics['avg_rank']:.1f}/50")
 
 # Cross-eval on qual test
-print("\n🔍 Cross-evaluating on label_qual test...")
+print("\n Cross-evaluating on label_qual test...")
 qual_metrics = evaluate_qual(qual_test_batches, model, pref_head, desc="Final Qual Eval")
 
-print(f"\n📊 FINAL - Label_QUAL Test (cross-eval):")
+print(f"\n FINAL - Label_QUAL Test (cross-eval):")
 print(f"  Recall@1: {qual_metrics['recall@1']:.3f} ({qual_metrics['recall@1']*100:.1f}%)")
 print(f"  Recall@3: {qual_metrics['recall@3']:.3f} ({qual_metrics['recall@3']*100:.1f}%)")
 print(f"  Recall@5: {qual_metrics['recall@5']:.3f} ({qual_metrics['recall@5']*100:.1f}%)")
@@ -688,8 +539,7 @@ print("\n" + "=" * 100)
 print("TRAINING COMPLETE!")
 print("=" * 100)
 
-# Save final model
-print("\n📦 Saving final model (for Stage 1B)...")
+
 
 lora_path = os.path.join(OUTPUT_DIR, "lora_adapters_final")
 model.save_pretrained(lora_path)
@@ -697,15 +547,13 @@ print(f"✓ Saved LoRA adapters: {lora_path}")
 
 pref_head_path = os.path.join(OUTPUT_DIR, "pref_head_final.pt")
 torch.save(pref_head.state_dict(), pref_head_path)
-print(f"✓ Saved pref_head: {pref_head_path}")
+print(f" Saved pref_head: {pref_head_path}")
 
 tokenizer.save_pretrained(os.path.join(OUTPUT_DIR, "tokenizer"))
-print(f"✓ Saved tokenizer")
+print(f" Saved tokenizer")
 
-print(f"\n✅ All files saved to: {OUTPUT_DIR}")
-print(f"🎯 Use this checkpoint for Stage 1B")
+print(f"\n All files saved to: {OUTPUT_DIR}")
 
 print("\n" + "=" * 100)
 print("STAGE 1A COMPLETE!")
 print("=" * 100)
-

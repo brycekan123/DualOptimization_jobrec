@@ -15,11 +15,17 @@ from transformers import BitsAndBytesConfig
 import numpy as np
 from tqdm import tqdm
 
-# ========================================
-# CONFIG
-# ========================================
+
+import argparse
+
+parser = argparse.ArgumentParser(description='Evaluate Stage 1A model')
+parser.add_argument('--hf_token', type=str, required=True,
+                    help='HuggingFace API token for model access')
+args = parser.parse_args()
+
+
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
-HF_TOKEN = ""
+HF_TOKEN = args.hf_token
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
 CHECKPOINT_DIR = "./stage1a_output/run_20251217_232520"
