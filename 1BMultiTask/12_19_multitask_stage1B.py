@@ -30,8 +30,9 @@ CACHE_DIR = os.path.expanduser("~/llama_cache")
 PIPELINE_OUTPUT = args.pipeline_output
 DATA_DIR = args.data_dir
 
-PREF_TRAIN_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "train.csv")
-PREF_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "test.csv")
+# CHANGE 1: Use pre-filtered pref_68_batches_train.csv instead of train.csv
+PREF_TRAIN_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "pref_68_batches_train.csv")
+PREF_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "pref_68_batches_test.csv")
 QUAL_TRAIN_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "qual_train.csv")
 QUAL_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "qual_test.csv")
 USER_FILE = os.path.join(PIPELINE_OUTPUT, "Final_users.csv")
@@ -43,7 +44,7 @@ PROCESS_CHUNK_SIZE = 5
 LEARNING_RATE = 5e-5
 NUM_EPOCHS = 3
 
-NUM_TRAIN_BATCHES = 68  
+# NUM_TRAIN_BATCHES removed - we'll use all batches from the pre-filtered file
 NUM_EVAL_PREF_BATCHES = 30  
 
 LORA_RANK = 16
@@ -84,13 +85,13 @@ item_dict = item_df.set_index('job_id').to_dict('index')
 print(f"✓ Loaded {len(user_dict):,} users")
 print(f"✓ Loaded {len(item_dict):,} items")
 
-# Load train/test data
+# Load train/test data - NOTE: pref_train_df now loads from pref_68_batches_train.csv
 pref_train_df = pd.read_csv(PREF_TRAIN_CSV)
 pref_test_df = pd.read_csv(PREF_TEST_CSV)
 qual_train_df = pd.read_csv(QUAL_TRAIN_CSV)
 qual_test_df = pd.read_csv(QUAL_TEST_CSV)
 
-print(f"\n✓ Label_pref data:")
+print(f"\n✓ Label_pref data (PRE-FILTERED to 68 batches):")
 print(f"  Train: {len(pref_train_df):,} samples, {pref_train_df['user'].nunique():,} users")
 print(f"  Test: {len(pref_test_df):,} samples, {pref_test_df['user'].nunique():,} users")
 
@@ -162,17 +163,13 @@ def prepare_qual_batches(df, max_negatives=49):
     
     return batches
 
-pref_train_batches_all = prepare_pref_batches(pref_train_df, NEGATIVES_PER_USER)
+# CHANGE 2: No random sampling - use all batches from pre-filtered file
+pref_train_batches = prepare_pref_batches(pref_train_df, NEGATIVES_PER_USER)
 pref_test_batches_all = prepare_pref_batches(pref_test_df, NEGATIVES_PER_USER)
-qual_train_batches_all = prepare_qual_batches(qual_train_df)
+qual_train_batches = prepare_qual_batches(qual_train_df)
 qual_test_batches_all = prepare_qual_batches(qual_test_df)
 
-np.random.seed(42)
-pref_train_indices = np.random.choice(len(pref_train_batches_all), size=NUM_TRAIN_BATCHES, replace=False)
-pref_train_batches = [pref_train_batches_all[i] for i in pref_train_indices]
-qual_train_batches = qual_train_batches_all  # Use all qual batches
-
-print(f"\n Analysis of randomly sampled {NUM_TRAIN_BATCHES} pref training batches:")
+print(f"\n Analysis of pref training batches:")
 pref_users = [b['user_id'] for b in pref_train_batches]
 print(f"  Total batches: {len(pref_train_batches)}")
 print(f"  Unique users: {len(set(pref_users))}")
@@ -183,7 +180,7 @@ else:
     print(f"  ✓ Data looks diverse")
 
 print(f"\n✓ Multi-task training batches:")
-print(f"  Pref train: {len(pref_train_batches)} (random sample, seed=42)")
+print(f"  Pref train: {len(pref_train_batches)} (all batches from pre-filtered file)")
 print(f"  Qual train: {len(qual_train_batches)} (all batches)")
 print(f"  Batches will be paired by index")
 
@@ -197,7 +194,6 @@ print(f"  Qual test: {len(qual_eval_batches)} (all batches)")
 print(f"\n✓ Final evaluation batches:")
 print(f"  Pref test: {len(pref_test_batches_all)} (all batches)")
 print(f"  Qual test: {len(qual_test_batches_all)} (all batches)")
-
 
 def format_features(features_dict):
     """Convert features dict to readable string."""

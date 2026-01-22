@@ -14,6 +14,7 @@ from transformers import BitsAndBytesConfig
 import numpy as np
 from tqdm import tqdm
 from datetime import datetime
+
 import argparse
 
 parser = argparse.ArgumentParser(description='Stage 2 training script')
@@ -40,8 +41,8 @@ STAGE1B_QUAL_HEAD = os.path.join(STAGE1B_CHECKPOINT, "qual_head.pt")
 PIPELINE_OUTPUT = args.pipeline_output
 DATA_DIR = args.data_dir
 
-PREF_TRAIN_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "train.csv")
-PREF_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "test.csv")
+PREF_TRAIN_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "pref_68_batches_train.csv")
+PREF_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "pref_68_batches_test.csv")
 QUAL_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "qual_test.csv")
 USER_FILE = os.path.join(PIPELINE_OUTPUT, "Final_users.csv")
 ITEM_FILE = os.path.join(PIPELINE_OUTPUT, "Final_items.csv")
@@ -51,19 +52,20 @@ MAX_SEQ_LENGTH = 1000
 PROCESS_CHUNK_SIZE = 5
 LEARNING_RATE = 1e-4
 NUM_EPOCHS = 20
-NUM_TRAIN_BATCHES = 68
 
 TAU = 0.05
 ETA_MU = 0.01
 TEMPERATURE = 1.0
 LAMBDA_CLAMP = 5.0
 
-NUM_TRAIN_BATCHES = 68
-
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, f"stage2_output/run_tau_{TAU}")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# ========================================
+# PATH VERIFICATION
+# ========================================
+# Save config
 with open(os.path.join(OUTPUT_DIR, "config.txt"), 'w') as f:
     f.write(f"TAU: {TAU} (~{TAU*100:.1f}% expected qualification rate)\n")
     f.write(f"  NOTE: TAU set manually (see pre-training diagnostic for data-derived recommendation)\n")
@@ -72,7 +74,6 @@ with open(os.path.join(OUTPUT_DIR, "config.txt"), 'w') as f:
     f.write(f"LEARNING_RATE: {LEARNING_RATE}\n")
     f.write(f"LAMBDA_CLAMP: {LAMBDA_CLAMP}\n")
     f.write(f"NUM_EPOCHS: {NUM_EPOCHS}\n")
-    f.write(f"NUM_TRAIN_BATCHES: {NUM_TRAIN_BATCHES}\n")
     f.write(f"\nPaths:\n")
     f.write(f"Stage1B checkpoint: {STAGE1B_CHECKPOINT}\n")
     f.write(f"LoRA path: {STAGE1B_LORA_PATH}\n")
@@ -112,7 +113,7 @@ pref_train_df = pd.read_csv(PREF_TRAIN_CSV)
 pref_test_df = pd.read_csv(PREF_TEST_CSV)
 qual_test_df = pd.read_csv(QUAL_TEST_CSV)
 
-print(f"\n✓ Label_pref data (training data for Stage 2):")
+print(f"\n✓ Label_pref data (PRE-FILTERED to 68 batches - training data for Stage 2):")
 print(f"  Train: {len(pref_train_df):,} samples, {pref_train_df['user'].nunique():,} users")
 print(f"  Test: {len(pref_test_df):,} samples, {pref_test_df['user'].nunique():,} users")
 print(f"  Train positives: {(pref_train_df['label_pref']==1).sum():,}")
@@ -192,15 +193,11 @@ def prepare_qual_batches(df, max_negatives=49):
     
     return batches
 
-pref_train_batches_all = prepare_pref_batches(pref_train_df, NEGATIVES_PER_USER)
+pref_train_batches = prepare_pref_batches(pref_train_df, NEGATIVES_PER_USER)
 pref_test_batches = prepare_pref_batches(pref_test_df, NEGATIVES_PER_USER)
 
-np.random.seed(42)
-pref_train_indices = np.random.choice(len(pref_train_batches_all), size=NUM_TRAIN_BATCHES, replace=False)
-pref_train_batches = [pref_train_batches_all[i] for i in pref_train_indices]
-
 # Analyze sampled 68 pref batches (verify matches Stage 1B)
-print(f"\n📊 Analysis of randomly sampled {NUM_TRAIN_BATCHES} pref training batches:")
+print(f"\n📊 Analysis of pref training batches (pre-filtered):")
 pref_users = [b['user_id'] for b in pref_train_batches]
 print(f"  Total batches: {len(pref_train_batches)}")
 print(f"  Unique users: {len(set(pref_users))}")
@@ -212,7 +209,7 @@ else:
 
 # Use ALL test batches (no sampling)
 print(f"\n✓ User-centric PREF batches (1 user, 50 jobs each):")
-print(f"  Train: {len(pref_train_batches):,} (random sample, seed=42)")
+print(f"  Train: {len(pref_train_batches):,} (all batches from pre-filtered file)")
 print(f"  Test: {len(pref_test_batches):,} (ALL batches)")
 
 # Note: qual batches will be prepared during verification
