@@ -16,6 +16,11 @@ The training pipeline consists of three stages:
 2. **Stage 1B**: Multi-task training for both preference and qualification heads
 3. **Stage 2**: Train lambda head with Lagrangian optimization using Stage 1B checkpoint
 
+
+## Dataset
+The dataset used in this project is available on GitHub:  
+[Job_Rec_MultiPerspective_Reasoning Dataset](https://github.com/brycekan123/Job_Rec_MultiPerspective_Reasoning)
+
 ## Usage
 
 ### Stage 1A: Preference-Only Training
