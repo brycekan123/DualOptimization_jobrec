@@ -27,11 +27,10 @@ MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
 # Data paths
-DATA_DIR = "stage1a_data"
-PARENT_DIR = ".."
-PREF_TEST_CSV = os.path.join(PARENT_DIR, "pipeline_output", DATA_DIR, "test.csv")
-USER_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_users.csv")
-ITEM_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_items.csv")
+DATASET_DIR = os.path.join("..", "dataset")
+PREF_TEST_CSV = os.path.join(DATASET_DIR, "pref_68_batches_test.csv")
+USER_FILE = os.path.join(DATASET_DIR, "Final_users.csv")
+ITEM_FILE = os.path.join(DATASET_DIR, "Final_items.csv")
 
 NEGATIVES_PER_SAMPLE = 49  
 MAX_SEQ_LENGTH = 2000 

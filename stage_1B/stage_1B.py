@@ -15,10 +15,8 @@ import argparse
 
 
 parser = argparse.ArgumentParser(description='Train Stage 1B multi-task model')
-parser.add_argument('--pipeline_output', type=str, required=True,
-                    help='Path to pipeline_output directory (e.g., ../pipeline_output)')
-parser.add_argument('--data_dir', type=str, default='stage1a_data',
-                    help='Name of the data subdirectory (default: stage1a_data)')
+parser.add_argument('--dataset', type=str, required=True,
+                    help='Path to dataset directory (e.g., ../dataset)')
 parser.add_argument('--hf_token', type=str, required=True,
                     help='HuggingFace API token for model access')
 args = parser.parse_args()
@@ -27,16 +25,15 @@ HF_TOKEN = args.hf_token
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
-PIPELINE_OUTPUT = args.pipeline_output
-DATA_DIR = args.data_dir
+DATASET_DIR = args.dataset
 
-# CHANGE 1: Use pre-filtered pref_68_batches_train.csv instead of train.csv
-PREF_TRAIN_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "pref_68_batches_train.csv")
-PREF_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "pref_68_batches_test.csv")
-QUAL_TRAIN_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "qual_train.csv")
-QUAL_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "qual_test.csv")
-USER_FILE = os.path.join(PIPELINE_OUTPUT, "Final_users.csv")
-ITEM_FILE = os.path.join(PIPELINE_OUTPUT, "Final_items.csv")
+# All CSVs are now directly in the dataset directory
+PREF_TRAIN_CSV = os.path.join(DATASET_DIR, "pref_68_batches_train.csv")
+PREF_TEST_CSV = os.path.join(DATASET_DIR, "pref_68_batches_test.csv")
+QUAL_TRAIN_CSV = os.path.join(DATASET_DIR, "qual_train.csv")
+QUAL_TEST_CSV = os.path.join(DATASET_DIR, "qual_test.csv")
+USER_FILE = os.path.join(DATASET_DIR, "Final_users.csv")
+ITEM_FILE = os.path.join(DATASET_DIR, "Final_items.csv")
 
 NEGATIVES_PER_USER = 49
 MAX_SEQ_LENGTH = 1000
@@ -44,7 +41,6 @@ PROCESS_CHUNK_SIZE = 5
 LEARNING_RATE = 5e-5
 NUM_EPOCHS = 3
 
-# NUM_TRAIN_BATCHES removed - we'll use all batches from the pre-filtered file
 NUM_EVAL_PREF_BATCHES = 30  
 
 LORA_RANK = 16
@@ -65,7 +61,6 @@ def print_gpu_usage(tag=""):
         allocated = torch.cuda.memory_allocated() / 1e9
         reserved = torch.cuda.memory_reserved() / 1e9
         print(f"[GPU {tag}] Allocated: {allocated:.2f} GB | Reserved: {reserved:.2f} GB")
-
 
 print("\n" + "=" * 100)
 print("LOADING DATA")

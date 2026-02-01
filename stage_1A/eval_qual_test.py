@@ -24,10 +24,9 @@ CACHE_DIR = os.path.expanduser("~/llama_cache")
 CHECKPOINT_PATH = "stage1a_output/run_20251217_232520/checkpoint_epoch3"
 HEAD_TYPE = "pref" 
 
-DATA_DIR = "stage1a_data"
-QUAL_TEST_CSV = f"../pipeline_output/{DATA_DIR}/qual_test.csv"
-USER_FILE = "../pipeline_output/Final_users.csv"
-ITEM_FILE = "../pipeline_output/Final_items.csv"
+QUAL_TEST_CSV = f"../dataset/qual_test.csv"
+USER_FILE = "../dataset/Final_users.csv"
+ITEM_FILE = "../dataset/Final_items.csv"
 
 
 MAX_SEQ_LENGTH = 1536

@@ -16,16 +16,13 @@ from tqdm import tqdm
 from datetime import datetime
 
 import argparse
-
 parser = argparse.ArgumentParser(description='Stage 2 training script')
-parser.add_argument('--pipeline_output', type=str, required=True,
-                    help='Path to pipeline_output directory (e.g., ../pipeline_output)')
-parser.add_argument('--data_dir', type=str, default='stage1a_data',
-                    help='Name of the data subdirectory (default: stage1a_data)')
+parser.add_argument('--dataset', type=str, required=True,
+                    help='Path to dataset directory (e.g., ../dataset)')
 parser.add_argument('--hf_token', type=str, required=True,
                     help='HuggingFace API token for model access')
 parser.add_argument('--stage1b_checkpoint', type=str, required=True,
-                    help='Path to Stage 1B checkpoint directory (e.g., ../12_19_multitask_stage1B/stage1b_multitask_output/5e-5_head_LoRA/checkpoint_epoch3)')
+                    help='Path to Stage 1B checkpoint directory (e.g., ../stage_1B/stage1b_multitask_output/5e-5_head_LoRA/checkpoint_epoch3)')
 args = parser.parse_args()
 
 
@@ -38,14 +35,13 @@ STAGE1B_LORA_PATH = os.path.join(STAGE1B_CHECKPOINT, "lora_adapters")
 STAGE1B_PREF_HEAD = os.path.join(STAGE1B_CHECKPOINT, "pref_head.pt")
 STAGE1B_QUAL_HEAD = os.path.join(STAGE1B_CHECKPOINT, "qual_head.pt")
 
-PIPELINE_OUTPUT = args.pipeline_output
-DATA_DIR = args.data_dir
+DATASET_DIR = args.dataset
 
-PREF_TRAIN_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "pref_68_batches_train.csv")
-PREF_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "pref_68_batches_test.csv")
-QUAL_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "qual_test.csv")
-USER_FILE = os.path.join(PIPELINE_OUTPUT, "Final_users.csv")
-ITEM_FILE = os.path.join(PIPELINE_OUTPUT, "Final_items.csv")
+PREF_TRAIN_CSV = os.path.join(DATASET_DIR, "pref_68_batches_train.csv")
+PREF_TEST_CSV = os.path.join(DATASET_DIR, "pref_68_batches_test.csv")
+QUAL_TEST_CSV = os.path.join(DATASET_DIR, "qual_test.csv")
+USER_FILE = os.path.join(DATASET_DIR, "Final_users.csv")
+ITEM_FILE = os.path.join(DATASET_DIR, "Final_items.csv")
 
 NEGATIVES_PER_USER = 49
 MAX_SEQ_LENGTH = 1000
@@ -53,11 +49,10 @@ PROCESS_CHUNK_SIZE = 5
 LEARNING_RATE = 1e-4
 NUM_EPOCHS = 20
 
-TAU = 0.01
+TAU = 0.05
 ETA_MU = 0.01
 TEMPERATURE = 1.0
 LAMBDA_CLAMP = 5.0
-
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, f"stage2_output/run_tau_{TAU}")

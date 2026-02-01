@@ -11,12 +11,9 @@ import numpy as np
 from tqdm import tqdm
 from datetime import datetime
 import argparse
-
 parser = argparse.ArgumentParser(description='Train Stage 1A LLM-based recommender model')
-parser.add_argument('--pipeline_output', type=str, required=True,
-                    help='Path to pipeline_output directory (e.g., ../pipeline_output)')
-parser.add_argument('--data_dir', type=str, default='stage1a_data',
-                    help='Name of the data subdirectory (default: stage1a_data)')
+parser.add_argument('--dataset', type=str, required=True,
+                    help='Path to dataset directory (e.g., ../dataset)')
 parser.add_argument('--hf_token', type=str, required=True,
                     help='HuggingFace API token for model access')
 args = parser.parse_args()
@@ -25,26 +22,27 @@ HF_TOKEN = args.hf_token
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
-PIPELINE_OUTPUT = args.pipeline_output
-DATA_DIR = args.data_dir
+DATASET_DIR = args.dataset
 
-TRAIN_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "train.csv")
-TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "test.csv")
-VAL_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "val.csv")
-QUAL_TEST_CSV = os.path.join(PIPELINE_OUTPUT, DATA_DIR, "qual_test.csv")  # For cross-eval
-USER_FILE = os.path.join(PIPELINE_OUTPUT, "Final_users.csv")
-ITEM_FILE = os.path.join(PIPELINE_OUTPUT, "Final_items.csv")
+# All CSVs are now directly in the dataset directory
+TRAIN_CSV = os.path.join(DATASET_DIR, "pref_68_batches_train.csv")
+TEST_CSV = os.path.join(DATASET_DIR, "pref_68_batches_test.csv")
+VAL_CSV = os.path.join(DATASET_DIR, "val.csv")
+QUAL_TEST_CSV = os.path.join(DATASET_DIR, "qual_test.csv")  # For cross-eval
+USER_FILE = os.path.join(DATASET_DIR, "Final_users.csv")
+ITEM_FILE = os.path.join(DATASET_DIR, "Final_items.csv")
+
 NEGATIVES_PER_USER = 49
 MAX_SEQ_LENGTH = 1000
 PROCESS_CHUNK_SIZE = 10
 LEARNING_RATE = 5e-5
 NUM_EPOCHS = 3
-NUM_TRAIN_BATCHES = 250
-NUM_TEST_BATCHES = 250
 NUM_QUAL_TEST_BATCHES = 50  
+
 LORA_RANK = 16
 LORA_ALPHA = 32
 LORA_DROPOUT = 0.1
+
 OUTPUT_DIR = f"stage1a_output/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -75,8 +73,6 @@ print(f"  Test positives: {(test_df['label_pref']==1).sum():,}")
 
 # Load qual test for cross-eval
 qual_test_df = pd.read_csv(QUAL_TEST_CSV)
-
-
 def prepare_pref_batches(df, negatives_per_user):
     """
     Prepare batches for label_pref (user-centric).
@@ -149,10 +145,8 @@ test_batches = prepare_pref_batches(test_df, NEGATIVES_PER_USER)
 val_batches = prepare_pref_batches(val_df, NEGATIVES_PER_USER)
 qual_test_batches = prepare_qual_batches(qual_test_df)
 
-# Sample to configured batch sizes for faster training
+# Sample only qual_test_batches to configured size
 np.random.seed(42)
-train_batches = [train_batches[i] for i in np.random.choice(len(train_batches), size=min(NUM_TRAIN_BATCHES, len(train_batches)), replace=False)]
-test_batches = [test_batches[i] for i in np.random.choice(len(test_batches), size=min(NUM_TEST_BATCHES, len(test_batches)), replace=False)]
 qual_test_batches = [qual_test_batches[i] for i in np.random.choice(len(qual_test_batches), size=min(NUM_QUAL_TEST_BATCHES, len(qual_test_batches)), replace=False)]
 
 print(f"✓ Label_pref batches:")
@@ -502,57 +496,6 @@ for epoch in range(NUM_EPOCHS):
     torch.save(pref_head.state_dict(), os.path.join(checkpoint_dir, "pref_head.pt"))
     
     print(f" Saved checkpoint: {checkpoint_dir}")
-
-
-print("\n" + "=" * 100)
-print("FINAL EVALUATION")
-print("=" * 100)
-
-# Eval on pref test
-print("\n🔍 Evaluating on label_pref test...")
-pref_metrics = evaluate_pref(test_batches, model, pref_head, desc="Final Pref Eval")
-
-print(f"\n FINAL - Label_PREF Test:")
-print(f"  Loss: {pref_metrics['loss']:.4f}")
-print(f"  Recall@1: {pref_metrics['recall@1']:.3f} ({pref_metrics['recall@1']*100:.1f}%)")
-print(f"  Recall@3: {pref_metrics['recall@3']:.3f} ({pref_metrics['recall@3']*100:.1f}%)")
-print(f"  Recall@5: {pref_metrics['recall@5']:.3f} ({pref_metrics['recall@5']*100:.1f}%)")
-print(f"  NDCG@1: {pref_metrics['ndcg@1']:.3f}")
-print(f"  NDCG@3: {pref_metrics['ndcg@3']:.3f}")
-print(f"  NDCG@5: {pref_metrics['ndcg@5']:.3f}")
-print(f"  Avg Rank: {pref_metrics['avg_rank']:.1f}/50")
-
-# Cross-eval on qual test
-print("\n Cross-evaluating on label_qual test...")
-qual_metrics = evaluate_qual(qual_test_batches, model, pref_head, desc="Final Qual Eval")
-
-print(f"\n FINAL - Label_QUAL Test (cross-eval):")
-print(f"  Recall@1: {qual_metrics['recall@1']:.3f} ({qual_metrics['recall@1']*100:.1f}%)")
-print(f"  Recall@3: {qual_metrics['recall@3']:.3f} ({qual_metrics['recall@3']*100:.1f}%)")
-print(f"  Recall@5: {qual_metrics['recall@5']:.3f} ({qual_metrics['recall@5']*100:.1f}%)")
-print(f"  NDCG@1: {qual_metrics['ndcg@1']:.3f}")
-print(f"  NDCG@3: {qual_metrics['ndcg@3']:.3f}")
-print(f"  NDCG@5: {qual_metrics['ndcg@5']:.3f}")
-print(f"  Avg Rank: {qual_metrics['avg_rank']:.1f}")
-
-print("\n" + "=" * 100)
-print("TRAINING COMPLETE!")
-print("=" * 100)
-
-
-
-lora_path = os.path.join(OUTPUT_DIR, "lora_adapters_final")
-model.save_pretrained(lora_path)
-print(f"✓ Saved LoRA adapters: {lora_path}")
-
-pref_head_path = os.path.join(OUTPUT_DIR, "pref_head_final.pt")
-torch.save(pref_head.state_dict(), pref_head_path)
-print(f" Saved pref_head: {pref_head_path}")
-
-tokenizer.save_pretrained(os.path.join(OUTPUT_DIR, "tokenizer"))
-print(f" Saved tokenizer")
-
-print(f"\n All files saved to: {OUTPUT_DIR}")
 
 print("\n" + "=" * 100)
 print("STAGE 1A COMPLETE!")

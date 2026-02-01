@@ -24,12 +24,10 @@ HF_TOKEN = args.hf_token
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
-# Data paths (MATCH Stage 2 test setup)
-DATA_DIR = "stage1a_data"
-PARENT_DIR = ".."  # One level up
-QUAL_TEST_CSV = os.path.join(PARENT_DIR, "pipeline_output", DATA_DIR, "qual_test.csv")
-USER_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_users.csv")
-ITEM_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_items.csv")
+DATASET_DIR = os.path.join("..", "dataset")
+QUAL_TEST_CSV = os.path.join(DATASET_DIR, "qual_test.csv")
+USER_FILE = os.path.join(DATASET_DIR, "Final_users.csv")
+ITEM_FILE = os.path.join(DATASET_DIR, "Final_items.csv")
 
 
 NEGATIVES_PER_SAMPLE = 49  

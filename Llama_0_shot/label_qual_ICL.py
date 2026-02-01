@@ -25,12 +25,11 @@ MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
 # Data paths
-DATA_DIR = "stage1a_data"
-PARENT_DIR = ".."
-QUAL_TRAIN_CSV = os.path.join(PARENT_DIR, "pipeline_output", DATA_DIR, "qual_train.csv")
-QUAL_TEST_CSV = os.path.join(PARENT_DIR, "pipeline_output", DATA_DIR, "qual_test.csv")
-USER_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_users.csv")
-ITEM_FILE = os.path.join(PARENT_DIR, "pipeline_output", "Final_items.csv")
+DATASET_DIR = os.path.join("..", "dataset")
+QUAL_TRAIN_CSV = os.path.join(DATASET_DIR, "qual_train.csv")
+QUAL_TEST_CSV = os.path.join(DATASET_DIR, "qual_test.csv")
+USER_FILE = os.path.join(DATASET_DIR, "Final_users.csv")
+ITEM_FILE = os.path.join(DATASET_DIR, "Final_items.csv")
 
 # Settings
 NEGATIVES_PER_SAMPLE = 49 

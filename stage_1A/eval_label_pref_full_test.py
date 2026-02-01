@@ -29,9 +29,9 @@ HF_TOKEN = args.hf_token
 CACHE_DIR = os.path.expanduser("~/llama_cache")
 
 CHECKPOINT_DIR = "./stage1a_output/run_20251217_232520"
-TEST_CSV = f"../pipeline_output/stage1a_data/test.csv"
-USER_FILE = "../pipeline_output/Final_users.csv"
-ITEM_FILE = "../pipeline_output/Final_items.csv"
+TEST_CSV = f"../dataset/pref_68_batches_test.csv"
+USER_FILE = "../dataset/Final_users.csv"
+ITEM_FILE = "../dataset/Final_items.csv"
 
 NEGATIVES_PER_USER = 49
 MAX_SEQ_LENGTH = 1000
